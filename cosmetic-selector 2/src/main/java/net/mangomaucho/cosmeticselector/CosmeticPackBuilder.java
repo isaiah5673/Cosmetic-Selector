@@ -7,6 +7,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.fabricmc.loader.api.FabricLoader;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -20,13 +23,34 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Reads normal Minecraft plus every pack in the resourcepacks folder and writes the folder pack
- * "Cosmetic Looks (auto)". Each item gets one look per pack that changes it (vanilla first),
- * and looks that are exactly the same as another one are left out.
+ * Reads normal Minecraft plus every pack in the resourcepacks folder and builds the looks
+ * (kept inside the mod's config folder and loaded by the mod, so nothing shows in the pack list).
+ * Each item gets one look per pack that changes it (vanilla first). Looks that look exactly
+ * the same as another one are left out.
  */
 public final class CosmeticPackBuilder {
-    public static final String PACK_NAME = "Cosmetic Looks (auto)";
+    /** Old folder from earlier versions; removed so it no longer shows in the pack list. */
+    private static final String OLD_PACK_NAME = "Cosmetic Looks (auto)";
     public static final String VANILLA = "minecraft";
+
+    /** A whole-pack theme: which look each item uses for that pack. */
+    public record Theme(String name, Map<String, String> lookForItem) {}
+
+    private static volatile List<Theme> themes = List.of();
+    private static volatile boolean built = false;
+
+    public static List<Theme> themes() {
+        ensureBuilt();
+        return themes;
+    }
+
+    public static Path outputDir() {
+        return FabricLoader.getInstance().getConfigDir().resolve("cosmetic_selector").resolve("looks");
+    }
+
+    public static void ensureBuilt() {
+        if (!built) build();
+    }
 
     public static final String[] MATS = {"wooden", "stone", "copper", "iron", "golden", "diamond", "netherite"};
     public static final String[] TOOLS = {"sword", "pickaxe", "axe", "spear", "shovel", "hoe"};
@@ -56,6 +80,22 @@ public final class CosmeticPackBuilder {
         void add(String rel, byte[] data) { files.put(rel, data); }
         void add(String rel, String text) { files.put(rel, text.getBytes(StandardCharsets.UTF_8)); }
         void print(byte[] data) { fingerprint.writeBytes(data); fingerprint.write(0); }
+        /** Adds a texture by what it looks like, so the same picture saved differently still matches. */
+        void printImage(byte[] png, byte[] mcmeta) {
+            try {
+                BufferedImage img = ImageIO.read(new ByteArrayInputStream(png));
+                if (img == null) { print(png); return; }
+                int w = img.getWidth(), h = img.getHeight();
+                int[] px = img.getRGB(0, 0, w, h, null, 0, w);
+                java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(8 + px.length * 4);
+                buf.putInt(w).putInt(h);
+                for (int p : px) buf.putInt((p >>> 24) == 0 ? 0 : p); // all see-through pixels count as the same
+                print(buf.array());
+                if (h > w && mcmeta != null) print(mcmeta); // only animations care about the .mcmeta
+            } catch (Exception e) {
+                print(png);
+            }
+        }
         String key() {
             try {
                 byte[] d = MessageDigest.getInstance("SHA-1").digest(fingerprint.toByteArray());
@@ -67,20 +107,25 @@ public final class CosmeticPackBuilder {
     }
 
     public static synchronized void build() {
+        built = true;
         Path packsDir = FabricLoader.getInstance().getGameDir().resolve("resourcepacks");
-        Path out = packsDir.resolve(PACK_NAME);
+        Path out = outputDir();
+        List<Theme> newThemes = new ArrayList<>();
         try {
             Files.createDirectories(packsDir);
+            deleteTree(packsDir.resolve(OLD_PACK_NAME));
             deleteTree(out.resolve("assets"));
             Files.createDirectories(out);
 
             PackReader vanilla = classpathReader();
-            Map<String, Set<String>> seen = new HashMap<>();   // item -> fingerprints already used
+            Map<String, Map<String, String>> seen = new HashMap<>();   // item -> fingerprint -> look that has it
             Set<String> usedSlugs = new HashSet<>();
             usedSlugs.add(VANILLA);
 
             // normal Minecraft first, so it's always the first look and packs that match it are skipped
-            addPack(vanilla, vanilla, VANILLA, out, seen);
+            Map<String, String> vanillaTheme = new LinkedHashMap<>();
+            addPack(vanilla, vanilla, VANILLA, out, seen, vanillaTheme);
+            newThemes.add(new Theme("Default", vanillaTheme));
 
             List<Path> packs = new ArrayList<>();
             try (Stream<Path> s = Files.list(packsDir)) {
@@ -89,16 +134,20 @@ public final class CosmeticPackBuilder {
             int count = 0;
             for (Path p : packs) {
                 String file = p.getFileName().toString();
-                if (file.equals(PACK_NAME) || file.startsWith(".")) continue;
+                if (file.equals(OLD_PACK_NAME) || file.startsWith(".")) continue;
                 boolean isZip = Files.isRegularFile(p) && file.toLowerCase(Locale.ROOT).endsWith(".zip");
                 if (!isZip && !Files.isDirectory(p)) continue;
 
                 String slug = slugFor(file, usedSlugs);
                 try (PackReader reader = isZip ? zipReader(p) : dirReader(p)) {
                     if (reader == null) continue;
-                    if (addPack(reader, vanilla, slug, out, seen)) {
+                    Map<String, String> theme = new LinkedHashMap<>();
+                    if (addPack(reader, vanilla, slug, out, seen, theme)) {
                         usedSlugs.add(slug);
                         count++;
+                        // items this pack doesn't change use the normal look in its theme
+                        for (Map.Entry<String, String> v : vanillaTheme.entrySet()) theme.putIfAbsent(v.getKey(), v.getValue());
+                        newThemes.add(new Theme(file.replaceAll("(?i)\\.zip$", ""), theme));
                     }
                 } catch (Exception e) {
                     System.err.println("[Cosmetic Selector] Skipped pack " + file + ": " + e);
@@ -109,25 +158,34 @@ public final class CosmeticPackBuilder {
                     + " packs\",\"min_format\":65,\"max_format\":999}}";
             Files.writeString(out.resolve("pack.mcmeta"), mcmeta, StandardCharsets.UTF_8);
         } catch (Exception e) {
-            System.err.println("[Cosmetic Selector] Could not build " + PACK_NAME + ": " + e);
+            System.err.println("[Cosmetic Selector] Could not build looks: " + e);
         }
+        themes = List.copyOf(newThemes);
     }
 
     /** Adds every new look this pack has. Returns true if it added at least one. */
     private static boolean addPack(PackReader r, PackReader vanilla, String s, Path out,
-                                   Map<String, Set<String>> seen) throws IOException {
+                                   Map<String, Map<String, String>> seen, Map<String, String> theme) throws IOException {
         boolean any = false;
         for (String item : FLAT) {
-            any |= save(out, seen, item, flatLook(r, vanilla, s, item));
+            any |= save(out, seen, item, s, flatLook(r, vanilla, s, item), theme);
         }
-        any |= save(out, seen, "trident", tridentLook(r, s));
-        any |= save(out, seen, "shield", shieldLook(r, s));
+        any |= save(out, seen, "trident", s, tridentLook(r, s), theme);
+        any |= save(out, seen, "shield", s, shieldLook(r, s), theme);
         return any;
     }
 
-    private static boolean save(Path out, Map<String, Set<String>> seen, String item, Look look) throws IOException {
+    private static boolean save(Path out, Map<String, Map<String, String>> seen, String item, String slug,
+                                Look look, Map<String, String> theme) throws IOException {
         if (look == null) return false;
-        if (!seen.computeIfAbsent(item, k -> new HashSet<>()).add(look.key())) return false; // same as one we have
+        Map<String, String> known = seen.computeIfAbsent(item, k -> new HashMap<>());
+        String same = known.get(look.key());
+        if (same != null) {           // looks exactly like one we already have: reuse it, don't repeat it
+            theme.put(item, same);
+            return !same.equals(VANILLA);
+        }
+        known.put(look.key(), slug);
+        theme.put(item, slug);
         for (Map.Entry<String, byte[]> e : look.files.entrySet()) {
             Path p = out.resolve(e.getKey());
             Files.createDirectories(p.getParent());
@@ -163,9 +221,10 @@ public final class CosmeticPackBuilder {
                 if (png == null) continue;
                 String dst = "assets/cosmetics/textures/item/" + s + "/" + texPath + ".png";
                 look.add(dst, png);
-                look.print(png);
                 byte[] meta = r.read(src + ".mcmeta");
-                if (meta != null) { look.add(dst + ".mcmeta", meta); look.print(meta); }
+                if (meta != null) look.add(dst + ".mcmeta", meta);
+                look.print(t.getKey().getBytes(StandardCharsets.UTF_8));
+                look.printImage(png, meta);
                 overrides.addProperty(t.getKey(), "cosmetics:item/" + s + "/" + texPath);
             }
             if (overrides.size() == 0) continue;
@@ -286,9 +345,10 @@ public final class CosmeticPackBuilder {
         if (png == null) return false;
         String dst = "assets/cosmetics/textures/item/" + s + "/" + name + ".png";
         look.add(dst, png);
-        look.print(png);
         byte[] meta = r.read(src + ".mcmeta");
-        if (meta != null) { look.add(dst + ".mcmeta", meta); look.print(meta); }
+        if (meta != null) look.add(dst + ".mcmeta", meta);
+        look.print(name.getBytes(StandardCharsets.UTF_8));
+        look.printImage(png, meta);
         return true;
     }
 

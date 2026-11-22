@@ -16,7 +16,7 @@ public class CosmeticSelectorClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         CosmeticConfig.load();
-        CosmeticPackBuilder.build(); // turn every pack in resourcepacks into looks
+        // looks are built the first time the game loads its resources (see ReloadableResourceManagerImplMixin)
 
         openKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.cosmetic_selector.open",

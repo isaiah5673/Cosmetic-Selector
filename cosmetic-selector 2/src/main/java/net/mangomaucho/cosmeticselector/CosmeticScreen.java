@@ -14,6 +14,7 @@ import net.minecraft.util.Identifier;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Page 1: Swords, Pickaxes, Axes, Spears, Shovels, Hoes, Trident, Mace, Ender Pearl, Shield, Totem.
@@ -24,6 +25,8 @@ public class CosmeticScreen extends Screen {
     private static final int GOLD = 0xFFFFB000;
     private static final int WHITE = 0xFFFFFFFF;
     private static final int GRAY = 0xFFAAAAAA;
+    private static final int ARMY_GREEN = 0x4F7A28;   // military green for the big title
+    private static final int TOP = 62;                // where the buttons start, under the big title
 
     private static final int TILE = 44;
     private static final int CELL = 50;
@@ -39,6 +42,8 @@ public class CosmeticScreen extends Screen {
     private int group = -1;
     /** Which item's looks are open, or null. */
     private Item selectedItem = null;
+    /** True while the Choose Theme page is open. */
+    private boolean themePage = false;
     private int lookPage = 0;
 
     private record Icon(ItemStack stack, int x, int y, float scale) {}
@@ -76,13 +81,14 @@ public class CosmeticScreen extends Screen {
         icons.clear();
         highlights.clear();
 
-        if (selectedItem != null) initLooks();
+        if (themePage) initThemes();
+        else if (selectedItem != null) initLooks();
         else if (group >= 0) initGroup();
         else initMain();
 
         // bottom row
         int y = height - 28;
-        boolean canGoBack = selectedItem != null || group >= 0;
+        boolean canGoBack = themePage || selectedItem != null || group >= 0;
         ButtonWidget back = ButtonWidget.builder(Text.literal("< Back"), b -> goBack())
                 .dimensions(width / 2 - 154, y, 98, 20).build();
         back.active = canGoBack;
@@ -96,7 +102,9 @@ public class CosmeticScreen extends Screen {
     }
 
     private void goBack() {
-        if (selectedItem != null) {
+        if (themePage) {
+            themePage = false;
+        } else if (selectedItem != null) {
             selectedItem = null;   // back to the material list (or the main page for single items)
         } else {
             group = -1;
@@ -109,7 +117,7 @@ public class CosmeticScreen extends Screen {
 
     private void initMain() {
         heading = title;
-        int top = 34;
+        int top = TOP;
         int leftX = width / 2 - BUTTON_W - 6;
         int rightX = width / 2 + 6;
 
@@ -124,13 +132,64 @@ public class CosmeticScreen extends Screen {
             Item it = item(CosmeticPackBuilder.SINGLES[i]);
             addRow(rightX, top + i * ROW, SINGLE_TITLES[i], it, hasLooks(it), () -> { selectedItem = it; });
         }
+        // switch everything to one pack at once
+        int themeY = top + CosmeticPackBuilder.TOOLS.length * ROW + 8;
+        addDrawableChild(ButtonWidget.builder(Text.literal("Choose Theme"), b -> {
+            themePage = true;
+            lookPage = 0;
+            clearAndInit();
+        }).dimensions(width / 2 - 100, themeY, 200, 20).build());
+    }
+
+    // ---------- Choose Theme page ----------
+
+    private void initThemes() {
+        heading = Text.literal("Choose Theme");
+        List<CosmeticPackBuilder.Theme> themes = CosmeticPackBuilder.themes();
+        int top = TOP;
+        int perPage = Math.max(1, (height - 34 - 26 - top) / ROW);
+        int pages = Math.max(1, (themes.size() + perPage - 1) / perPage);
+        lookPage = Math.max(0, Math.min(lookPage, pages - 1));
+        int start = lookPage * perPage;
+        int w = 220;
+        for (int i = start; i < Math.min(themes.size(), start + perPage); i++) {
+            CosmeticPackBuilder.Theme theme = themes.get(i);
+            String label = "Choose theme for " + theme.name();
+            addDrawableChild(ButtonWidget.builder(Text.literal(textRenderer.trimToWidth(label, w - 10)), b -> {
+                applyTheme(theme);
+                themePage = false;
+                clearAndInit();
+            }).dimensions(width / 2 - w / 2, top + (i - start) * ROW, w, 20).build());
+        }
+        addPageButtons(pages, height - 56);
+    }
+
+    private static void applyTheme(CosmeticPackBuilder.Theme theme) {
+        for (Map.Entry<String, String> e : theme.lookForItem().entrySet()) {
+            Item it = item(e.getKey());
+            if (it == Items.AIR) continue;
+            Identifier model = Identifier.of("cosmetics", e.getKey() + "/" + e.getValue());
+            if (CosmeticRegistry.isValid(model)) CosmeticConfig.set(it, model);
+        }
+    }
+
+    private void addPageButtons(int pages, int y) {
+        if (pages <= 1) return;
+        ButtonWidget prev = ButtonWidget.builder(Text.literal("<"), b -> { lookPage--; clearAndInit(); })
+                .dimensions(width / 2 - 45, y, 20, 20).build();
+        ButtonWidget next = ButtonWidget.builder(Text.literal(">"), b -> { lookPage++; clearAndInit(); })
+                .dimensions(width / 2 + 25, y, 20, 20).build();
+        prev.active = lookPage > 0;
+        next.active = lookPage < pages - 1;
+        addDrawableChild(prev);
+        addDrawableChild(next);
     }
 
     // ---------- page 2 ----------
 
     private void initGroup() {
         heading = Text.literal(TOOL_TITLES[group]);
-        int top = 34;
+        int top = TOP;
         int x = width / 2 - BUTTON_W / 2;
         List<Item> items = groupItems(group);
         for (int i = 0; i < items.size(); i++) {
@@ -157,7 +216,7 @@ public class CosmeticScreen extends Screen {
         List<CosmeticRegistry.Variant> looks = CosmeticRegistry.variantsFor(selectedItem);
         Identifier current = CosmeticConfig.get(selectedItem);
 
-        int top = 34;
+        int top = TOP;
         int bottom = height - 34;
         int areaW = Math.min(width - 20, 8 * CELL);
         int cols = Math.max(1, areaW / CELL);
@@ -189,31 +248,26 @@ public class CosmeticScreen extends Screen {
             if (modelId.equals(current)) highlights.add(new Box(cx - 1, cy - 1, TILE + 2, TILE + 2));
         }
 
-        if (pages > 1) {
-            int y = bottom - 22;
-            ButtonWidget prev = ButtonWidget.builder(Text.literal("<"), b -> { lookPage--; clearAndInit(); })
-                    .dimensions(width / 2 - 45, y, 20, 20).build();
-            ButtonWidget next = ButtonWidget.builder(Text.literal(">"), b -> { lookPage++; clearAndInit(); })
-                    .dimensions(width / 2 + 25, y, 20, 20).build();
-            prev.active = lookPage > 0;
-            next.active = lookPage < pages - 1;
-            addDrawableChild(prev);
-            addDrawableChild(next);
-        }
+        addPageButtons(pages, bottom - 22);
     }
 
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float deltaTicks) {
         super.render(context, mouseX, mouseY, deltaTicks); // background + buttons
 
-        context.drawCenteredTextWithShadow(textRenderer, heading, width / 2, 12, WHITE);
+        // big bold green title
+        Text big = heading.copy().styled(st -> st.withBold(true).withColor(ARMY_GREEN));
+        context.getMatrices().pushMatrix();
+        context.getMatrices().translate(width / 2f, 14);
+        context.getMatrices().scale(2f, 2f);
+        context.drawCenteredTextWithShadow(textRenderer, big, 0, 0, 0xFF000000 | ARMY_GREEN);
+        context.getMatrices().popMatrix();
 
         if (CosmeticRegistry.items().isEmpty()) {
-            int y = height / 2 - 30;
+            int y = height / 2 - 20;
             context.drawCenteredTextWithShadow(textRenderer, Text.literal("No looks found yet."), width / 2, y, GOLD);
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal("Go to Options > Resource Packs and turn on"), width / 2, y + 16, WHITE);
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal(CosmeticPackBuilder.PACK_NAME), width / 2, y + 28, GOLD);
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal("New packs show up after you press Reload packs."), width / 2, y + 44, GRAY);
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("Put resource packs in your resourcepacks folder,"), width / 2, y + 16, WHITE);
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("then press Reload packs."), width / 2, y + 28, GRAY);
         }
 
         for (Box b : highlights) {
