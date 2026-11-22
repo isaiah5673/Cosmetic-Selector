@@ -16,6 +16,7 @@ public class CosmeticSelectorClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         CosmeticConfig.load();
+        CosmeticPackBuilder.build(); // turn every pack in resourcepacks into looks
 
         openKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.cosmetic_selector.open",

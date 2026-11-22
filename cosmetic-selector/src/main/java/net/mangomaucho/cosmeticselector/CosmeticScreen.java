@@ -2,11 +2,12 @@ package net.mangomaucho.cosmeticselector;
 
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.tooltip.Tooltip;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
+import net.minecraft.registry.Registries;
 import net.minecraft.screen.ScreenTexts;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
@@ -15,8 +16,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Left side: every item that has cosmetics in your packs.
- * Right side: a big preview plus a grid of every look for the chosen item. Click one to use it.
+ * Page 1: Swords, Pickaxes, Axes, Spears, Shovels, Hoes, Trident, Mace, Ender Pearl, Shield, Totem.
+ * Page 2 (tools only): the materials, wooden to netherite.
+ * Page 3: every look for that item, pictures only. Click one to use it, click it again to go back to normal.
  */
 public class CosmeticScreen extends Screen {
     private static final int GOLD = 0xFFFFB000;
@@ -24,172 +26,194 @@ public class CosmeticScreen extends Screen {
     private static final int GRAY = 0xFFAAAAAA;
 
     private static final int TILE = 44;
-    private static final int CELL_W = 56;
-    private static final int CELL_H = 58;
+    private static final int CELL = 50;
+    private static final int ROW = 22;
+    private static final int BUTTON_W = 150;
+
+    private static final String[] TOOL_TITLES = {"Swords", "Pickaxes", "Axes", "Spears", "Shovels", "Hoes"};
+    private static final String[] SINGLE_TITLES = {"Trident", "Mace", "Ender Pearl", "Shield", "Totem"};
 
     private final Screen parent;
 
-    private List<Item> items = List.of();
-    private Item selectedItem;
-    private int itemPage = 0;
-    private int variantPage = 0;
+    /** Which tool group is open (index into TOOLS), or -1. */
+    private int group = -1;
+    /** Which item's looks are open, or null. */
+    private Item selectedItem = null;
+    private int lookPage = 0;
 
-    private record Icon(ItemStack stack, int x, int y, float scale, boolean showDefault) {}
-    private record Label(Text text, int centerX, int y, int color) {}
+    private record Icon(ItemStack stack, int x, int y, float scale) {}
     private record Box(int x, int y, int w, int h) {}
 
     private final List<Icon> icons = new ArrayList<>();
-    private final List<Label> labels = new ArrayList<>();
     private final List<Box> highlights = new ArrayList<>();
-
-    private int previewX, previewY;
+    private Text heading = Text.empty();
 
     public CosmeticScreen(Screen parent) {
         super(Text.translatable("screen.cosmetic_selector.title"));
         this.parent = parent;
     }
 
+    private static Item item(String id) {
+        return Registries.ITEM.get(Identifier.of("minecraft", id));
+    }
+
+    private static boolean hasLooks(Item item) {
+        return item != Items.AIR && !CosmeticRegistry.variantsFor(item).isEmpty();
+    }
+
+    private static List<Item> groupItems(int g) {
+        List<Item> list = new ArrayList<>();
+        for (String m : CosmeticPackBuilder.MATS) {
+            Item it = item(m + "_" + CosmeticPackBuilder.TOOLS[g]);
+            if (it != Items.AIR) list.add(it);
+        }
+        return list;
+    }
+
     @Override
     protected void init() {
         CosmeticRegistry.rescan();
-        items = CosmeticRegistry.items();
-        if (selectedItem == null || !items.contains(selectedItem)) {
-            selectedItem = items.isEmpty() ? null : items.get(0);
-            variantPage = 0;
-        }
-
         icons.clear();
-        labels.clear();
         highlights.clear();
 
-        int top = 30;
+        if (selectedItem != null) initLooks();
+        else if (group >= 0) initGroup();
+        else initMain();
+
+        // bottom row
+        int y = height - 28;
+        boolean canGoBack = selectedItem != null || group >= 0;
+        ButtonWidget back = ButtonWidget.builder(Text.literal("< Back"), b -> goBack())
+                .dimensions(width / 2 - 154, y, 98, 20).build();
+        back.active = canGoBack;
+        addDrawableChild(back);
+        addDrawableChild(ButtonWidget.builder(Text.literal("Reload packs"), b -> {
+            CosmeticPackBuilder.build();
+            if (client != null) client.reloadResources();
+        }).dimensions(width / 2 - 50, y, 100, 20).build());
+        addDrawableChild(ButtonWidget.builder(ScreenTexts.DONE, b -> close())
+                .dimensions(width / 2 + 56, y, 98, 20).build());
+    }
+
+    private void goBack() {
+        if (selectedItem != null) {
+            selectedItem = null;   // back to the material list (or the main page for single items)
+        } else {
+            group = -1;
+        }
+        lookPage = 0;
+        clearAndInit();
+    }
+
+    // ---------- page 1 ----------
+
+    private void initMain() {
+        heading = title;
+        int top = 34;
+        int leftX = width / 2 - BUTTON_W - 6;
+        int rightX = width / 2 + 6;
+
+        for (int g = 0; g < CosmeticPackBuilder.TOOLS.length; g++) {
+            final int index = g;
+            List<Item> items = groupItems(g);
+            boolean any = items.stream().anyMatch(CosmeticScreen::hasLooks);
+            Item iconItem = items.isEmpty() ? Items.BARRIER : items.get(Math.min(5, items.size() - 1));
+            addRow(leftX, top + g * ROW, TOOL_TITLES[g], iconItem, any, () -> { group = index; });
+        }
+        for (int i = 0; i < CosmeticPackBuilder.SINGLES.length; i++) {
+            Item it = item(CosmeticPackBuilder.SINGLES[i]);
+            addRow(rightX, top + i * ROW, SINGLE_TITLES[i], it, hasLooks(it), () -> { selectedItem = it; });
+        }
+    }
+
+    // ---------- page 2 ----------
+
+    private void initGroup() {
+        heading = Text.literal(TOOL_TITLES[group]);
+        int top = 34;
+        int x = width / 2 - BUTTON_W / 2;
+        List<Item> items = groupItems(group);
+        for (int i = 0; i < items.size(); i++) {
+            Item it = items.get(i);
+            addRow(x, top + i * ROW, new ItemStack(it).getName().getString(), it, hasLooks(it), () -> { selectedItem = it; });
+        }
+    }
+
+    private void addRow(int x, int y, String label, Item iconItem, boolean active, Runnable open) {
+        ButtonWidget button = ButtonWidget.builder(Text.literal(label), b -> {
+            open.run();
+            lookPage = 0;
+            clearAndInit();
+        }).dimensions(x + 22, y, BUTTON_W - 22, 20).build();
+        button.active = active;
+        addDrawableChild(button);
+        icons.add(new Icon(new ItemStack(iconItem), x + 2, y + 2, 1f));
+    }
+
+    // ---------- page 3: pictures only ----------
+
+    private void initLooks() {
+        heading = new ItemStack(selectedItem).getName();
+        List<CosmeticRegistry.Variant> looks = CosmeticRegistry.variantsFor(selectedItem);
+        Identifier current = CosmeticConfig.get(selectedItem);
+
+        int top = 34;
         int bottom = height - 34;
+        int areaW = Math.min(width - 20, 8 * CELL);
+        int cols = Math.max(1, areaW / CELL);
+        int rows = Math.max(1, (bottom - 24 - top) / CELL);
+        int per = cols * rows;
+        int pages = Math.max(1, (looks.size() + per - 1) / per);
+        lookPage = Math.max(0, Math.min(lookPage, pages - 1));
 
-        // ---------- Left: item list ----------
-        int listX = 10;
-        int listW = Math.min(150, width / 3);
-        int rowH = 22;
-        int listBottom = bottom - 24;
-        int perPage = Math.max(1, (listBottom - top) / rowH);
-        int itemPages = Math.max(1, (items.size() + perPage - 1) / perPage);
-        itemPage = Math.max(0, Math.min(itemPage, itemPages - 1));
+        int shown = Math.min(cols, looks.size());
+        int startX = width / 2 - (shown * CELL) / 2 + (CELL - TILE) / 2;
 
-        int start = itemPage * perPage;
-        for (int i = start; i < Math.min(items.size(), start + perPage); i++) {
-            Item item = items.get(i);
-            int y = top + (i - start) * rowH;
-            ItemStack stack = new ItemStack(item);
-            String name = textRenderer.trimToWidth(stack.getName().getString(), listW - 30);
-            addDrawableChild(ButtonWidget.builder(Text.literal(name), b -> {
-                selectedItem = item;
-                variantPage = 0;
+        int start = lookPage * per;
+        for (int i = start; i < Math.min(looks.size(), start + per); i++) {
+            Identifier modelId = looks.get(i).modelId();
+            int idx = i - start;
+            int cx = startX + (idx % cols) * CELL;
+            int cy = top + (idx / cols) * CELL;
+
+            addDrawableChild(ButtonWidget.builder(Text.empty(), b -> {
+                // click the one you're using again to go back to your normal pack's look
+                CosmeticConfig.set(selectedItem, modelId.equals(CosmeticConfig.get(selectedItem)) ? null : modelId);
                 clearAndInit();
-            }).dimensions(listX + 22, y, listW - 22, 20).build());
-            icons.add(new Icon(stack, listX + 2, y + 2, 1f, false)); // shows the look you have on now
-            if (item == selectedItem) highlights.add(new Box(listX, y, listW, 20));
+            }).dimensions(cx, cy, TILE, TILE).build());
+
+            ItemStack preview = new ItemStack(selectedItem);
+            preview.set(DataComponentTypes.ITEM_MODEL, modelId);
+            icons.add(new Icon(preview, cx + (TILE - 32) / 2, cy + (TILE - 32) / 2, 2f));
+
+            if (modelId.equals(current)) highlights.add(new Box(cx - 1, cy - 1, TILE + 2, TILE + 2));
         }
 
-        if (itemPages > 1) {
-            int y = listBottom + 2;
-            ButtonWidget prev = ButtonWidget.builder(Text.literal("<"), b -> { itemPage--; clearAndInit(); })
-                    .dimensions(listX, y, 20, 20).build();
-            ButtonWidget next = ButtonWidget.builder(Text.literal(">"), b -> { itemPage++; clearAndInit(); })
-                    .dimensions(listX + listW - 20, y, 20, 20).build();
-            prev.active = itemPage > 0;
-            next.active = itemPage < itemPages - 1;
+        if (pages > 1) {
+            int y = bottom - 22;
+            ButtonWidget prev = ButtonWidget.builder(Text.literal("<"), b -> { lookPage--; clearAndInit(); })
+                    .dimensions(width / 2 - 45, y, 20, 20).build();
+            ButtonWidget next = ButtonWidget.builder(Text.literal(">"), b -> { lookPage++; clearAndInit(); })
+                    .dimensions(width / 2 + 25, y, 20, 20).build();
+            prev.active = lookPage > 0;
+            next.active = lookPage < pages - 1;
             addDrawableChild(prev);
             addDrawableChild(next);
-            labels.add(new Label(Text.literal((itemPage + 1) + " / " + itemPages), listX + listW / 2, y + 6, GRAY));
         }
-
-        // ---------- Right: preview + variant grid ----------
-        int rx = listX + listW + 16;
-        int rw = width - rx - 10;
-
-        if (selectedItem != null) {
-            previewX = rx;
-            previewY = top;
-            icons.add(new Icon(new ItemStack(selectedItem), rx + 4, top + 4, 3f, false)); // 48px preview
-            Identifier current = CosmeticConfig.get(selectedItem);
-            String currentName = current == null ? "Default" : CosmeticRegistry.nameOf(current);
-            labels.add(new Label(new ItemStack(selectedItem).getName(), -1, top + 12, WHITE));
-            labels.add(new Label(Text.literal("Using: " + currentName), -1, top + 26, GOLD));
-
-            List<CosmeticRegistry.Variant> variants = CosmeticRegistry.variantsFor(selectedItem);
-            List<CosmeticRegistry.Variant> options = new ArrayList<>();
-            options.add(null); // "Default"
-            options.addAll(variants);
-
-            int gridTop = top + 64;
-            int cols = Math.max(1, rw / CELL_W);
-            int rows = Math.max(1, (bottom - 24 - gridTop) / CELL_H);
-            int per = cols * rows;
-            int pages = Math.max(1, (options.size() + per - 1) / per);
-            variantPage = Math.max(0, Math.min(variantPage, pages - 1));
-
-            int vStart = variantPage * per;
-            for (int i = vStart; i < Math.min(options.size(), vStart + per); i++) {
-                CosmeticRegistry.Variant v = options.get(i);
-                int idx = i - vStart;
-                int cx = rx + (idx % cols) * CELL_W;
-                int cy = gridTop + (idx / cols) * CELL_H;
-
-                String name = v == null ? "Default" : v.name();
-                Identifier modelId = v == null ? null : v.modelId();
-
-                addDrawableChild(ButtonWidget.builder(Text.empty(), b -> {
-                            CosmeticConfig.set(selectedItem, modelId);
-                            clearAndInit();
-                        })
-                        .dimensions(cx, cy, TILE, TILE)
-                        .tooltip(Tooltip.of(Text.literal(name)))
-                        .build());
-
-                ItemStack preview = new ItemStack(selectedItem);
-                if (modelId != null) preview.set(DataComponentTypes.ITEM_MODEL, modelId);
-                icons.add(new Icon(preview, cx + (TILE - 32) / 2, cy + (TILE - 32) / 2, 2f, v == null));
-
-                labels.add(new Label(Text.literal(textRenderer.trimToWidth(name, CELL_W - 2)),
-                        cx + TILE / 2, cy + TILE + 3, WHITE));
-
-                boolean picked = (modelId == null && current == null) || (modelId != null && modelId.equals(current));
-                if (picked) highlights.add(new Box(cx - 1, cy - 1, TILE + 2, TILE + 2));
-            }
-
-            if (pages > 1) {
-                int y = bottom - 22;
-                ButtonWidget prev = ButtonWidget.builder(Text.literal("<"), b -> { variantPage--; clearAndInit(); })
-                        .dimensions(rx, y, 20, 20).build();
-                ButtonWidget next = ButtonWidget.builder(Text.literal(">"), b -> { variantPage++; clearAndInit(); })
-                        .dimensions(rx + 70, y, 20, 20).build();
-                prev.active = variantPage > 0;
-                next.active = variantPage < pages - 1;
-                addDrawableChild(prev);
-                addDrawableChild(next);
-                labels.add(new Label(Text.literal((variantPage + 1) + " / " + pages), rx + 45, y + 6, GRAY));
-            }
-        }
-
-        // ---------- Bottom buttons ----------
-        addDrawableChild(ButtonWidget.builder(Text.literal("Reload packs"), b -> {
-            if (client != null) client.reloadResources();
-        }).dimensions(width / 2 - 154, height - 28, 150, 20).build());
-        addDrawableChild(ButtonWidget.builder(ScreenTexts.DONE, b -> close())
-                .dimensions(width / 2 + 4, height - 28, 150, 20).build());
     }
 
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float deltaTicks) {
         super.render(context, mouseX, mouseY, deltaTicks); // background + buttons
 
-        context.drawCenteredTextWithShadow(textRenderer, title, width / 2, 10, WHITE);
+        context.drawCenteredTextWithShadow(textRenderer, heading, width / 2, 12, WHITE);
 
-        if (items.isEmpty()) {
+        if (CosmeticRegistry.items().isEmpty()) {
             int y = height / 2 - 30;
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal("No cosmetics found in your resource packs."), width / 2, y, GOLD);
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal("Put item model files here in a pack:"), width / 2, y + 16, WHITE);
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal("assets/cosmetics/items/<item>/<look>.json"), width / 2, y + 28, GRAY);
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal("then turn the pack on and press Reload packs."), width / 2, y + 44, WHITE);
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("No looks found yet."), width / 2, y, GOLD);
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("Go to Options > Resource Packs and turn on"), width / 2, y + 16, WHITE);
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal(CosmeticPackBuilder.PACK_NAME), width / 2, y + 28, GOLD);
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("New packs show up after you press Reload packs."), width / 2, y + 44, GRAY);
         }
 
         for (Box b : highlights) {
@@ -199,29 +223,12 @@ public class CosmeticScreen extends Screen {
             context.fill(b.x() + b.w() - 1, b.y(), b.x() + b.w(), b.y() + b.h(), GOLD);
         }
 
-        if (selectedItem != null) {
-            context.fill(previewX, previewY, previewX + 56, previewY + 56, 0x66000000);
-        }
-
         for (Icon icon : icons) {
-            CosmeticManager.bypass = icon.showDefault();
-            try {
-                context.getMatrices().pushMatrix();
-                context.getMatrices().translate(icon.x(), icon.y());
-                context.getMatrices().scale(icon.scale(), icon.scale());
-                context.drawItem(icon.stack(), 0, 0);
-                context.getMatrices().popMatrix();
-            } finally {
-                CosmeticManager.bypass = false;
-            }
-        }
-
-        for (Label l : labels) {
-            if (l.centerX() < 0) {
-                context.drawTextWithShadow(textRenderer, l.text(), previewX + 64, l.y(), l.color());
-            } else {
-                context.drawCenteredTextWithShadow(textRenderer, l.text(), l.centerX(), l.y(), l.color());
-            }
+            context.getMatrices().pushMatrix();
+            context.getMatrices().translate(icon.x(), icon.y());
+            context.getMatrices().scale(icon.scale(), icon.scale());
+            context.drawItem(icon.stack(), 0, 0);
+            context.getMatrices().popMatrix();
         }
     }
 

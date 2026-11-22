@@ -76,7 +76,9 @@ public final class CosmeticRegistry {
         Map<Item, List<Variant>> ordered = new LinkedHashMap<>();
         for (Item item : itemsById.values()) {
             List<Variant> list = result.get(item);
-            list.sort(Comparator.comparing(Variant::name, String.CASE_INSENSITIVE_ORDER));
+            // normal Minecraft first, then packs in folder order
+            list.sort(Comparator.comparing((Variant v) -> !v.modelId().getPath().endsWith("/" + CosmeticPackBuilder.VANILLA))
+                    .thenComparing(v -> v.modelId().getPath()));
             ordered.put(item, Collections.unmodifiableList(list));
         }
 
