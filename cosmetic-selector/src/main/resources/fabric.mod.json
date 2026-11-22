@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "cosmetic_selector",
+  "version": "${version}",
+  "name": "Cosmetic Selector",
+  "description": "Pick which cosmetic look each item uses from your resource packs, with a menu that shows every item. Press K in game.",
+  "authors": ["MangoMaucho"],
+  "license": "MIT",
+  "icon": "assets/cosmetic_selector/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["net.mangomaucho.cosmeticselector.CosmeticSelectorClient"]
+  },
+  "mixins": ["cosmetic_selector.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
