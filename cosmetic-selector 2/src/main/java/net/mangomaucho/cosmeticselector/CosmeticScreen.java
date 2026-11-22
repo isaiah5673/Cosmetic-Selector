@@ -25,7 +25,7 @@ public class CosmeticScreen extends Screen {
     private static final int GOLD = 0xFFFFB000;
     private static final int WHITE = 0xFFFFFFFF;
     private static final int GRAY = 0xFFAAAAAA;
-    private static final int ARMY_GREEN = 0x4F7A28;   // military green for the big title
+    private static final int ARMY_GREEN = 0x6EE0C0;   // light green-blue for the big title
     private static final int TOP = 62;                // where the buttons start, under the big title
 
     private static final int TILE = 44;
