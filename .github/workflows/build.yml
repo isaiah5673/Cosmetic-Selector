@@ -1,11 +1,8 @@
-name: Build mod
+name: Build mods
 on: [push, workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: "cosmetic-selector 2"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -15,8 +12,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.8.2"
-      - run: gradle build
+      - name: Build Cosmetic Selector
+        working-directory: "cosmetic-selector 2"
+        run: gradle build
+      - name: Build ServerGUI
+        working-directory: servergui
+        run: gradle build
       - uses: actions/upload-artifact@v4
         with:
           name: cosmetic-selector-jar
           path: "cosmetic-selector 2/build/libs/*.jar"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: servergui-jar
+          path: servergui/build/libs/*.jar
