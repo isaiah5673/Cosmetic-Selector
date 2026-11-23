@@ -12,17 +12,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.8.2"
-      - name: Build Cosmetic Selector
-        working-directory: "cosmetic-selector 2"
-        run: gradle build
-      - name: Build ServerGUI
-        working-directory: servergui
-        run: gradle build
+      - name: Build Cosmetic Selector (newest folder)
+        run: |
+          dir=$(for d in cosmetic-selector*/; do [ -f "$d/gradle.properties" ] && echo "$(grep '^mod_version=' "$d/gradle.properties" | cut -d= -f2)|$d"; done | sort -V | tail -1 | cut -d'|' -f2)
+          echo "Building: $dir"
+          mkdir -p out-cosmetic
+          (cd "$dir" && gradle build) && cp "$dir"/build/libs/*.jar out-cosmetic/
+      - name: Build ServerGUI (newest folder)
+        run: |
+          dir=$(for d in servergui*/; do [ -f "$d/gradle.properties" ] && echo "$(grep '^mod_version=' "$d/gradle.properties" | cut -d= -f2)|$d"; done | sort -V | tail -1 | cut -d'|' -f2)
+          echo "Building: $dir"
+          mkdir -p out-servergui
+          (cd "$dir" && gradle build) && cp "$dir"/build/libs/*.jar out-servergui/
       - uses: actions/upload-artifact@v4
         with:
           name: cosmetic-selector-jar
-          path: "cosmetic-selector 2/build/libs/*.jar"
+          path: out-cosmetic/*.jar
       - uses: actions/upload-artifact@v4
         with:
           name: servergui-jar
-          path: servergui/build/libs/*.jar
+          path: out-servergui/*.jar
