@@ -24,6 +24,7 @@ import net.minecraft.text.MutableText;
 import net.minecraft.text.OrderedText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.WorldSavePath;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -60,6 +61,7 @@ public class ServerGuiScreen extends Screen {
     private int skinPage = 0;             // which page of skin boxes
     private String pickedSkin = null;     // the skin box you clicked (its id)
     private boolean busy = false;         // waiting for Mojang to change the skin
+    private boolean skinChanged = false;  // show the Reconnect button after a skin change
 
     private record Icon(ItemStack stack, Identifier texture, int x, int y) {}
     private record Favicon(Identifier id, int x, int y) {}
@@ -271,6 +273,7 @@ public class ServerGuiScreen extends Screen {
             SkinLibrary.wear(skin, message -> {
                 busy = false;
                 notice = message;
+                skinChanged = message.startsWith("Skin changed");
                 if (client != null && client.currentScreen == this) clearAndInit();
             });
         }).dimensions(width / 2 - 50, y, 100, 20).build();
@@ -296,8 +299,40 @@ public class ServerGuiScreen extends Screen {
         int deleteTextW = textRenderer.getWidth("Delete");
         icons.add(new Icon(ItemStack.EMPTY, TRASH_ICON, width / 2 + 54 + 50 - deleteTextW / 2 - 19, y + 2));
 
-        addDrawableChild(ButtonWidget.builder(Text.literal("< Back"), b -> open(Page.MAIN))
-                .dimensions(width / 2 - 100, height - 28, 200, 20).build());
+        boolean inWorld = client != null && client.world != null;
+        if (skinChanged && inWorld) {
+            // Back + Reconnect side by side
+            addDrawableChild(ButtonWidget.builder(Text.literal("< Back"), b -> open(Page.MAIN))
+                    .dimensions(width / 2 - 154, height - 28, 150, 20).build());
+            addDrawableChild(ButtonWidget.builder(Text.literal("Reconnect"), b -> reconnect())
+                    .dimensions(width / 2 + 4, height - 28, 150, 20).build());
+        } else {
+            addDrawableChild(ButtonWidget.builder(Text.literal("< Back"), b -> open(Page.MAIN))
+                    .dimensions(width / 2 - 100, height - 28, 200, 20).build());
+        }
+    }
+
+    /** Leaves and rejoins the server or single-player world you're in, so it loads your new skin. */
+    private void reconnect() {
+        if (client == null || client.world == null) return;
+        boolean singleplayer = client.isInSingleplayer();
+        ServerInfo server = client.getCurrentServerEntry();
+        String worldFolder = null;
+        if (singleplayer && client.getServer() != null) {
+            java.nio.file.Path root = client.getServer().getSavePath(WorldSavePath.ROOT).toAbsolutePath().normalize();
+            if (root.getFileName() != null) worldFolder = root.getFileName().toString();
+        }
+        client.world.disconnect(Text.literal("Reconnecting"));
+        if (singleplayer) client.disconnectWithSavingScreen();
+        else client.disconnectWithProgressScreen();
+
+        if (singleplayer && worldFolder != null) {
+            client.createIntegratedServerLoader().start(worldFolder, () -> client.setScreen(new TitleScreen(false)));
+        } else if (server != null) {
+            ConnectScreen.connect(new MultiplayerScreen(new TitleScreen(false)), client, ServerAddress.parse(server.address), server, false, null);
+        } else {
+            client.setScreen(new TitleScreen(false));
+        }
     }
 
     private SkinLibrary.Skin pickedSkin() {

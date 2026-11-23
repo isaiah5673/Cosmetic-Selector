@@ -43,6 +43,7 @@ public class ServerGuiClient implements ClientModInitializer {
             menuKeyWasDown = down;
 
             if (client.world == null) ChatLog.clearIfLeft();
+            LocalSkin.tick();
         });
     }
 

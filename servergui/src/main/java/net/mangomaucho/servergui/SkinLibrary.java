@@ -251,9 +251,12 @@ public final class SkinLibrary {
                         .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray())).build(),
                         HttpResponse.BodyHandlers.ofString());
                 if (r.statusCode() == 200) {
-                    message = "Skin changed! Rejoin a world or server to see it.";
+                    message = "Skin changed! Press Reconnect so other players see it too.";
                     byte[] png = skin.png;
-                    client.execute(() -> wearing = make(png, true));
+                    client.execute(() -> {
+                        wearing = make(png, true);
+                        LocalSkin.set(png);      // you see it right away
+                    });
                 } else if (r.statusCode() == 401) {
                     message = "Couldn't change skin: please restart Minecraft and log in again.";
                 } else if (r.statusCode() == 429) {
