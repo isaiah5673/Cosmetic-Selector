@@ -41,6 +41,7 @@ public final class SkinLibrary {
         public final byte[] png;
         public final boolean slim;
         public final boolean current;
+        Path file;                     // set for skins you uploaded here (so Delete can remove the file)
         private Identifier preview;
 
         Skin(String id, byte[] png, boolean slim, boolean current) {
@@ -56,6 +57,8 @@ public final class SkinLibrary {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
     private static final Path MY_SKINS = FabricLoader.getInstance().getConfigDir().resolve("servergui").resolve("skins");
+    /** Skins you deleted that live in another app (Launcher / Modrinth): hidden from this list. */
+    private static final Path HIDDEN = FabricLoader.getInstance().getConfigDir().resolve("servergui").resolve("hidden_skins.txt");
 
     private static volatile List<Skin> skins = List.of();
     private static volatile Skin wearing = null;
@@ -79,7 +82,12 @@ public final class SkinLibrary {
             Files.createDirectories(MY_SKINS);
             try (Stream<Path> s = Files.list(MY_SKINS)) {
                 for (Path p : s.sorted().toList()) {
-                    if (p.toString().toLowerCase(Locale.ROOT).endsWith(".png")) add(found, seen, Files.readAllBytes(p), false);
+                    if (!p.toString().toLowerCase(Locale.ROOT).endsWith(".png")) continue;
+                    Skin skin = make(Files.readAllBytes(p), false);
+                    if (skin != null && seen.add(skin.id)) {
+                        skin.file = p;
+                        found.add(skin);
+                    }
                 }
             }
         } catch (Exception ignored) {
@@ -114,8 +122,37 @@ public final class SkinLibrary {
             }
         } catch (Exception ignored) {
         }
+        Set<String> hidden = hidden();
+        found.removeIf(sk -> sk.file == null && hidden.contains(sk.id));
         skins = found;
         fetchWearing();
+    }
+
+    private static Set<String> hidden() {
+        try {
+            if (Files.exists(HIDDEN)) return new HashSet<>(Files.readAllLines(HIDDEN));
+        } catch (Exception ignored) {
+        }
+        return new HashSet<>();
+    }
+
+    /** Deletes a skin: uploaded ones are deleted, ones from other apps are removed from this list. */
+    public static String delete(Skin skin) {
+        if (skin.current) return "You're wearing that skin, so it can't be deleted.";
+        try {
+            if (skin.file != null) {
+                Files.deleteIfExists(skin.file);
+            } else {
+                Set<String> hidden = hidden();
+                hidden.add(skin.id);
+                Files.createDirectories(HIDDEN.getParent());
+                Files.write(HIDDEN, hidden);
+            }
+            reload();
+            return "Skin deleted.";
+        } catch (Exception e) {
+            return "Couldn't delete that skin.";
+        }
     }
 
     private static void add(List<Skin> list, Set<String> seen, byte[] png, boolean current) {
@@ -183,6 +220,8 @@ public final class SkinLibrary {
             if (s == null) return "That isn't a Minecraft skin (it must be a 64x64 or 64x32 .png).";
             Files.createDirectories(MY_SKINS);
             Files.write(MY_SKINS.resolve(s.id.substring(0, 12) + ".png"), png);
+            Set<String> hidden = hidden();
+            if (hidden.remove(s.id)) Files.write(HIDDEN, hidden);
             reload();
             return "Skin added!";
         } catch (Exception e) {

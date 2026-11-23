@@ -46,7 +46,6 @@ public class ServerGuiScreen extends Screen {
     private static final int PER_PAGE = 5;
     private static final Identifier UNKNOWN_SERVER = Identifier.ofVanilla("textures/misc/unknown_server.png");
     private static final Identifier CHAT_ICON = Identifier.of("servergui", "textures/gui/chat_icon.png");
-    private static final Identifier SKIN_ICON = Identifier.of("servergui", "textures/gui/skin_icon.png");
     private static final Map<String, Identifier> FAVICONS = new HashMap<>();
 
     private final Screen parent;
@@ -54,7 +53,8 @@ public class ServerGuiScreen extends Screen {
     private int serverPage = 0;
     private int chatScroll = 0;           // how many pixels scrolled up from the newest message
     private String notice = null;         // a short message under the title
-    private int skinIndex = 0;            // which skin is in the middle of the carousel
+    private int skinPage = 0;             // which page of skin boxes
+    private String pickedSkin = null;     // the skin box you clicked (its id)
     private boolean busy = false;         // waiting for Mojang to change the skin
 
     private record Icon(ItemStack stack, Identifier texture, int x, int y) {}
@@ -96,7 +96,8 @@ public class ServerGuiScreen extends Screen {
         }
         if (p == Page.SKINS) {
             SkinLibrary.reload();
-            skinIndex = 0;
+            skinPage = 0;
+            pickedSkin = null;
         }
         clearAndInit();
     }
@@ -109,7 +110,7 @@ public class ServerGuiScreen extends Screen {
         addIconButton(x, y, "Servers", new ItemStack(Items.COMPASS), null, b -> { serverPage = 0; open(Page.SERVERS); });
         chatButton = addIconButton(x, y + 26, "Chat", ItemStack.EMPTY, CHAT_ICON, b -> open(Page.CHAT));
         chatButton.active = client != null && client.getNetworkHandler() != null;
-        addIconButton(x, y + 52, "Skins", ItemStack.EMPTY, SKIN_ICON, b -> open(Page.SKINS));
+        addIconButton(x, y + 52, "Skins", new ItemStack(Items.NETHER_STAR), null, b -> open(Page.SKINS));
 
         addDrawableChild(ButtonWidget.builder(Text.literal("Done"), b -> close())
                 .dimensions(width / 2 - 100, height - 28, 200, 20).build());
@@ -199,29 +200,65 @@ public class ServerGuiScreen extends Screen {
 
     // ---------- skins page ----------
 
+    /** Size and layout of the skin boxes, so drawing and clicking line up. */
+    private record SkinGrid(int left, int top, int cols, int rows, int boxW, int boxH, int gap) {
+        int perPage() { return cols * rows; }
+    }
+
+    private SkinGrid skinGrid() {
+        int boxW = 40, boxH = 72, gap = 6;
+        int top = 40;
+        int areaW = Math.min(width - 80, 9 * (boxW + gap));
+        int areaH = height - 70 - top;
+        int cols = Math.max(1, (areaW + gap) / (boxW + gap));
+        int rows = Math.max(1, (areaH + gap) / (boxH + gap));
+        int gridW = cols * (boxW + gap) - gap;
+        return new SkinGrid(width / 2 - gridW / 2, top, cols, rows, boxW, boxH, gap);
+    }
+
     private void initSkins() {
         List<SkinLibrary.Skin> skins = SkinLibrary.skins();
-        int n = skins.size();
-        if (n > 0) skinIndex = Math.floorMod(skinIndex, n);
-        int midY = carouselTop() + carouselHeight() / 2 - 10;
+        SkinGrid g = skinGrid();
+        int pages = Math.max(1, (skins.size() + g.perPage() - 1) / g.perPage());
+        skinPage = Math.max(0, Math.min(skinPage, pages - 1));
 
-        ButtonWidget prev = ButtonWidget.builder(Text.literal("<"), b -> { skinIndex--; clearAndInit(); })
-                .dimensions(width / 2 - 170, midY, 20, 20).build();
-        ButtonWidget next = ButtonWidget.builder(Text.literal(">"), b -> { skinIndex++; clearAndInit(); })
-                .dimensions(width / 2 + 150, midY, 20, 20).build();
-        prev.active = next.active = n > 1;
+        // one box per skin: click to pick it
+        int start = skinPage * g.perPage();
+        for (int i = start; i < Math.min(skins.size(), start + g.perPage()); i++) {
+            SkinLibrary.Skin skin = skins.get(i);
+            int idx = i - start;
+            int bx = g.left() + (idx % g.cols()) * (g.boxW() + g.gap());
+            int by = g.top() + (idx / g.cols()) * (g.boxH() + g.gap());
+            addDrawableChild(ButtonWidget.builder(Text.empty(), b -> {
+                pickedSkin = skin.id;
+                notice = null;
+                clearAndInit();
+            }).dimensions(bx, by, g.boxW(), g.boxH()).build());
+        }
+
+        // page arrows: next on the right, back on the left
+        int gridW = g.cols() * (g.boxW() + g.gap()) - g.gap();
+        int gridH = g.rows() * (g.boxH() + g.gap()) - g.gap();
+        int midY = g.top() + gridH / 2 - 10;
+        ButtonWidget prev = ButtonWidget.builder(Text.literal("<"), b -> { skinPage--; clearAndInit(); })
+                .dimensions(g.left() - 26, midY, 20, 20).build();
+        ButtonWidget next = ButtonWidget.builder(Text.literal(">"), b -> { skinPage++; clearAndInit(); })
+                .dimensions(g.left() + gridW + 6, midY, 20, 20).build();
+        prev.active = skinPage > 0;
+        next.active = skinPage < pages - 1;
         addDrawableChild(prev);
         addDrawableChild(next);
 
+        SkinLibrary.Skin picked = pickedSkin();
         int y = height - 52;
         addDrawableChild(ButtonWidget.builder(Text.literal("Upload"), b -> {
             Path file = SkinLibrary.chooseFile();
             notice = file != null ? SkinLibrary.importFile(file) : "Or drag a skin .png onto this window.";
-            skinIndex = 0;
             clearAndInit();
-        }).dimensions(width / 2 - 102, y, 100, 20).build());
+        }).dimensions(width / 2 - 154, y, 100, 20).build());
+
         ButtonWidget select = ButtonWidget.builder(Text.literal(busy ? "Changing..." : "Select"), b -> {
-            SkinLibrary.Skin skin = currentSkin();
+            SkinLibrary.Skin skin = pickedSkin();
             if (skin == null) return;
             busy = true;
             notice = "Changing your skin...";
@@ -231,48 +268,57 @@ public class ServerGuiScreen extends Screen {
                 notice = message;
                 if (client != null && client.currentScreen == this) clearAndInit();
             });
-        }).dimensions(width / 2 + 2, y, 100, 20).build();
-        SkinLibrary.Skin shown = currentSkin();
-        select.active = !busy && shown != null && !shown.current;
+        }).dimensions(width / 2 - 50, y, 100, 20).build();
+        select.active = !busy && picked != null && !picked.current;
         addDrawableChild(select);
+
+        ButtonWidget delete = ButtonWidget.builder(Text.literal("Delete"), b -> {
+            SkinLibrary.Skin skin = pickedSkin();
+            if (skin == null) return;
+            notice = SkinLibrary.delete(skin);
+            pickedSkin = null;
+            clearAndInit();
+        }).dimensions(width / 2 + 54, y, 100, 20).build();
+        delete.active = picked != null && !picked.current;
+        addDrawableChild(delete);
 
         addDrawableChild(ButtonWidget.builder(Text.literal("< Back"), b -> open(Page.MAIN))
                 .dimensions(width / 2 - 100, height - 28, 200, 20).build());
     }
 
-    private SkinLibrary.Skin currentSkin() {
-        List<SkinLibrary.Skin> skins = SkinLibrary.skins();
-        if (skins.isEmpty()) return null;
-        return skins.get(Math.floorMod(skinIndex, skins.size()));
+    private SkinLibrary.Skin pickedSkin() {
+        if (pickedSkin == null) return null;
+        for (SkinLibrary.Skin s : SkinLibrary.skins()) if (s.id.equals(pickedSkin)) return s;
+        return null;
     }
 
-    private int carouselTop() { return 46; }
-    private int carouselHeight() { return Math.max(60, height - 60 - carouselTop() - 8); }
-
-    /** The middle skin big, the ones beside it smaller, like a carousel. */
+    /** Each skin drawn inside its box. Gold outline = picked, green outline = the one you're wearing. */
     private void renderSkins(DrawContext context) {
         List<SkinLibrary.Skin> skins = SkinLibrary.skins();
-        int n = skins.size();
-        if (n == 0) {
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal("No skins found yet."), width / 2, carouselTop() + 30, GRAY);
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal("Press Upload, or drag a skin .png onto this window."), width / 2, carouselTop() + 44, GRAY);
+        if (skins.isEmpty()) {
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("No skins found yet."), width / 2, 70, GRAY);
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("Press Upload, or drag a skin .png onto this window."), width / 2, 84, GRAY);
             return;
         }
-        int bigH = Math.min(128, carouselHeight());
-        int feet = carouselTop() + bigH;
-        int[] offsets = n >= 5 ? new int[]{-2, 2, -1, 1, 0} : n >= 3 ? new int[]{-1, 1, 0} : n == 2 ? new int[]{1, 0} : new int[]{0};
-        for (int off : offsets) {
-            SkinLibrary.Skin skin = skins.get(Math.floorMod(skinIndex + off, n));
+        SkinGrid g = skinGrid();
+        int start = skinPage * g.perPage();
+        for (int i = start; i < Math.min(skins.size(), start + g.perPage()); i++) {
+            SkinLibrary.Skin skin = skins.get(i);
+            int idx = i - start;
+            int bx = g.left() + (idx % g.cols()) * (g.boxW() + g.gap());
+            int by = g.top() + (idx / g.cols()) * (g.boxH() + g.gap());
             Identifier tex = SkinLibrary.preview(skin);
-            if (tex == null) continue;
-            int h = off == 0 ? bigH : Math.abs(off) == 1 ? bigH * 5 / 8 : bigH * 2 / 5;
-            int w = h / 2;
-            int cx = width / 2 + Integer.signum(off) * (Math.abs(off) == 1 ? 62 : 112);
-            context.drawTexture(RenderPipelines.GUI_TEXTURED, tex, cx - w / 2, feet - h, 0f, 0f, w, h, w, h);
-        }
-        SkinLibrary.Skin middle = skins.get(Math.floorMod(skinIndex, n));
-        if (middle.current) {
-            context.drawCenteredTextWithShadow(textRenderer, Text.literal("Wearing"), width / 2, feet + 3, 0xFF7CFC9A);
+            if (tex != null) {
+                int h = g.boxH() - 8, w = h / 2;
+                context.drawTexture(RenderPipelines.GUI_TEXTURED, tex, bx + (g.boxW() - w) / 2, by + 4, 0f, 0f, w, h, w, h);
+            }
+            int outline = skin.id.equals(pickedSkin) ? 0xFFFFB000 : skin.current ? 0xFF55DD77 : 0;
+            if (outline != 0) {
+                context.fill(bx - 1, by - 1, bx + g.boxW() + 1, by, outline);
+                context.fill(bx - 1, by + g.boxH(), bx + g.boxW() + 1, by + g.boxH() + 1, outline);
+                context.fill(bx - 1, by, bx, by + g.boxH(), outline);
+                context.fill(bx + g.boxW(), by, bx + g.boxW() + 1, by + g.boxH(), outline);
+            }
         }
     }
 
@@ -282,7 +328,6 @@ public class ServerGuiScreen extends Screen {
         String last = null;
         for (Path p : paths) last = SkinLibrary.importFile(p);
         if (last != null) notice = last;
-        skinIndex = 0;
         clearAndInit();
     }
 
@@ -482,12 +527,15 @@ public class ServerGuiScreen extends Screen {
             case SKINS -> "Skins";
         };
         context.getMatrices().pushMatrix();
-        context.getMatrices().translate(width / 2f, 12);
-        context.getMatrices().scale(2f, 2f);
-        context.drawCenteredTextWithShadow(textRenderer, gradient(titleText), 0, 0, WHITE);
+        context.getMatrices().translate(width / 2f, 14);
+        context.getMatrices().scale(1.5f, 1.5f);
+        context.drawCenteredTextWithShadow(textRenderer, Text.literal(titleText), 0, 0, WHITE);
         context.getMatrices().popMatrix();
 
-        if (notice != null) context.drawCenteredTextWithShadow(textRenderer, Text.literal(notice), width / 2, 36, 0xFFFFB000);
+        if (notice != null) {
+            int ny = page == Page.SKINS ? height - 64 : 36;   // on the Skins page, show it above the buttons
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal(notice), width / 2, ny, 0xFFFFB000);
+        }
 
         for (Icon icon : icons) {
             if (icon.texture() != null) {
