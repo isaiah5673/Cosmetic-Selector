@@ -3,6 +3,7 @@ package net.mangomaucho.servergui;
 import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.PlayerSkinDrawer;
+import net.minecraft.client.gui.screen.ConfirmScreen;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
@@ -278,10 +279,16 @@ public class ServerGuiScreen extends Screen {
 
         ButtonWidget delete = ButtonWidget.builder(Text.literal("Delete"), b -> {
             SkinLibrary.Skin skin = pickedSkin();
-            if (skin == null) return;
-            notice = SkinLibrary.delete(skin);
-            pickedSkin = null;
-            clearAndInit();
+            if (skin == null || client == null) return;
+            client.setScreen(new ConfirmScreen(yes -> {
+                if (yes) {
+                    notice = SkinLibrary.delete(skin);
+                    pickedSkin = null;
+                }
+                client.setScreen(this);
+            }, Text.literal("Are you sure you want to delete this skin?"),
+               Text.literal("This can't be undone."),
+               Text.literal("Delete"), Text.literal("Cancel")));
         }).dimensions(width / 2 + 54, y, 100, 20).build();
         delete.active = picked != null && !picked.current;
         addDrawableChild(delete);
@@ -423,16 +430,15 @@ public class ServerGuiScreen extends Screen {
 
             int by = y + nameH;
             int faceY = by + bubbleH - face;
-            // me: face on the left, bubble to its right. Everyone else: face on the right, bubble to its left.
-            int faceX = mine ? left : right - face;
-            int bx = mine ? bubbleLeft : right - face - 8 - bubbleW;
+            // everyone: face on the left, bubble to its right
+            int faceX = left;
+            int bx = bubbleLeft;
             drawFace(context, handler, e.name(), faceX, faceY, face);
             if (e.name() != null) {
                 Text nameText = Text.literal(e.name());
-                int nx = mine ? bx + 3 : bx + bubbleW - 3 - textRenderer.getWidth(nameText);
-                context.drawTextWithShadow(textRenderer, nameText, nx, y, mine ? 0xFF7CFC9A : 0xFFFFE070);
+                context.drawTextWithShadow(textRenderer, nameText, bx + 3, y, mine ? 0xFF7CFC9A : 0xFFFFE070);
             }
-            drawBubble(context, bx, by, bubbleW, bubbleH, faceY + face / 2, !mine);
+            drawBubble(context, bx, by, bubbleW, bubbleH, faceY + face / 2, false);
             int ty = by + 4;
             for (OrderedText line : lines) {
                 context.drawText(textRenderer, line, bx + 6, ty, 0xFF1E1E1E, false);
