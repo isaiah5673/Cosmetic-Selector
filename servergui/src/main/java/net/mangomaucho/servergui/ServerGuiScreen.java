@@ -329,7 +329,7 @@ public class ServerGuiScreen extends Screen {
         if (singleplayer && worldFolder != null) {
             client.createIntegratedServerLoader().start(worldFolder, () -> client.setScreen(new TitleScreen(false)));
         } else if (server != null) {
-            ConnectScreen.connect(new MultiplayerScreen(new TitleScreen(false)), client, ServerAddress.parse(server.address), server, false, null);
+            client.setScreen(new ReconnectScreen(server));   // waits a few seconds so the server doesn't block you
         } else {
             client.setScreen(new TitleScreen(false));
         }
