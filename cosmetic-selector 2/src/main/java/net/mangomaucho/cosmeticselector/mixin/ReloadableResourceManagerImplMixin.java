@@ -25,6 +25,7 @@ public class ReloadableResourceManagerImplMixin {
     private List<ResourcePack> cosmeticSelector$addLooks(List<ResourcePack> packs) {
         try {
             CosmeticPackBuilder.ensureBuilt();
+            net.mangomaucho.cosmeticselector.HudLooks.refresh();
             ResourcePackInfo info = new ResourcePackInfo("cosmetic_selector_looks",
                     Text.literal("Cosmetic Selector"), ResourcePackSource.BUILTIN, Optional.empty());
             List<ResourcePack> withLooks = new ArrayList<>(packs);

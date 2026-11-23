@@ -33,8 +33,65 @@ public final class CosmeticPackBuilder {
     private static final String OLD_PACK_NAME = "Cosmetic Looks (auto)";
     public static final String VANILLA = "minecraft";
 
-    /** A whole-pack theme: which look each item uses for that pack. */
+    /** A whole-pack theme: which look each item uses for that pack ("hud_hearts" etc. for the HUD). */
     public record Theme(String name, Map<String, String> lookForItem) {}
+
+    /** Hearts, hunger and XP bar: these are screen pictures, not items. */
+    public static final String[] HUD_SECTIONS = {"hearts", "hunger", "xp"};
+    /** One HUD look: which pack, which pictures it has, and which one to show in the menu. */
+    public record HudLook(String slug, List<String> sprites, String preview) {}
+
+    private static volatile Map<String, List<HudLook>> hudLooks = Map.of();
+    private static Map<String, List<HudLook>> buildingHud;
+
+    public static List<HudLook> hudLooks(String section) {
+        ensureBuilt();
+        return hudLooks.getOrDefault(section, List.of());
+    }
+
+    /** The picture names Minecraft uses for each HUD section (under textures/gui/sprites/). */
+    static List<String> hudSprites(String section) {
+        List<String> out = new ArrayList<>();
+        switch (section) {
+            case "hearts" -> {
+                out.add("hud/heart/container");
+                out.add("hud/heart/container_blinking");
+                out.add("hud/heart/container_hardcore");
+                out.add("hud/heart/container_hardcore_blinking");
+                out.add("hud/heart/vehicle_container");
+                out.add("hud/heart/vehicle_full");
+                out.add("hud/heart/vehicle_half");
+                for (String kind : new String[]{"", "poisoned_", "withered_", "absorbing_", "frozen_"}) {
+                    for (String hc : new String[]{"", "hardcore_"}) {
+                        for (String part : new String[]{"full", "half"}) {
+                            out.add("hud/heart/" + kind + hc + part);
+                            out.add("hud/heart/" + kind + hc + part + "_blinking");
+                        }
+                    }
+                }
+            }
+            case "hunger" -> {
+                for (String part : new String[]{"empty", "full", "half"}) {
+                    out.add("hud/food_" + part);
+                    out.add("hud/food_" + part + "_hunger");
+                }
+            }
+            case "xp" -> {
+                out.add("hud/experience_bar_background");
+                out.add("hud/experience_bar_progress");
+            }
+            default -> {}
+        }
+        return out;
+    }
+
+    private static String hudPreview(String section) {
+        return switch (section) {
+            case "hearts" -> "hud/heart/full";
+            case "hunger" -> "hud/food_full";
+            default -> "hud/experience_bar_progress";
+        };
+    }
 
     private static volatile List<Theme> themes = List.of();
     private static volatile boolean built = false;
@@ -117,6 +174,8 @@ public final class CosmeticPackBuilder {
             deleteTree(out.resolve("assets"));
             Files.createDirectories(out);
 
+            buildingHud = new LinkedHashMap<>();
+            for (String sec : HUD_SECTIONS) buildingHud.put(sec, new ArrayList<>());
             PackReader vanilla = classpathReader();
             Map<String, Map<String, String>> seen = new HashMap<>();   // item -> fingerprint -> look that has it
             Set<String> usedSlugs = new HashSet<>();
@@ -161,6 +220,11 @@ public final class CosmeticPackBuilder {
             System.err.println("[Cosmetic Selector] Could not build looks: " + e);
         }
         themes = List.copyOf(newThemes);
+        if (buildingHud != null) {
+            Map<String, List<HudLook>> done = new LinkedHashMap<>();
+            buildingHud.forEach((k, v) -> done.put(k, List.copyOf(v)));
+            hudLooks = done;
+        }
     }
 
     /** Adds every new look this pack has. Returns true if it added at least one. */
@@ -172,6 +236,43 @@ public final class CosmeticPackBuilder {
         }
         any |= save(out, seen, "trident", s, tridentLook(r, s), theme);
         any |= save(out, seen, "shield", s, shieldLook(r, s), theme);
+
+        // hearts, hunger, XP bar
+        for (String sec : HUD_SECTIONS) {
+            Look look = new Look();
+            List<String> sprites = new ArrayList<>();
+            for (String sprite : hudSprites(sec)) {
+                String src = "assets/minecraft/textures/gui/sprites/" + sprite + ".png";
+                byte[] png = r.read(src);
+                if (png == null) continue;
+                String dst = "assets/cosmetics/textures/gui/sprites/" + s + "/" + sprite + ".png";
+                look.add(dst, png);
+                byte[] meta = r.read(src + ".mcmeta");
+                if (meta != null) look.add(dst + ".mcmeta", meta);
+                look.print(sprite.getBytes(StandardCharsets.UTF_8));
+                look.printImage(png, meta);
+                sprites.add(sprite);
+            }
+            if (sprites.isEmpty()) continue;
+            String key = "hud_" + sec;
+            Map<String, String> known = seen.computeIfAbsent(key, k -> new HashMap<>());
+            String same = known.get(look.key());
+            if (same != null) {                 // same pictures as a look we already have
+                theme.put(key, same);
+                any |= !same.equals(VANILLA);
+                continue;
+            }
+            known.put(look.key(), s);
+            theme.put(key, s);
+            for (Map.Entry<String, byte[]> e : look.files.entrySet()) {
+                Path p = out.resolve(e.getKey());
+                Files.createDirectories(p.getParent());
+                Files.write(p, e.getValue());
+            }
+            String preview = sprites.contains(hudPreview(sec)) ? hudPreview(sec) : sprites.get(0);
+            if (buildingHud != null) buildingHud.get(sec).add(new HudLook(s, List.copyOf(sprites), preview));
+            any = true;
+        }
         return any;
     }
 

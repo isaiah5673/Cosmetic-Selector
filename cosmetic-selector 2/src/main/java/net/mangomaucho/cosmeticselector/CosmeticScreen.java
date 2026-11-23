@@ -1,5 +1,6 @@
 package net.mangomaucho.cosmeticselector;
 
+import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
@@ -35,6 +36,7 @@ public class CosmeticScreen extends Screen {
 
     private static final String[] TOOL_TITLES = {"Swords", "Pickaxes", "Axes", "Spears", "Shovels", "Hoes"};
     private static final String[] SINGLE_TITLES = {"Trident", "Mace", "Ender Pearl", "Shield", "Totem"};
+    private static final String[] HUD_TITLES = {"Hearts", "Hunger", "XP Bar"};
 
     private final Screen parent;
 
@@ -44,9 +46,15 @@ public class CosmeticScreen extends Screen {
     private Item selectedItem = null;
     /** True while the Choose Theme page is open. */
     private boolean themePage = false;
+    /** Which HUD section's looks are open ("hearts", "hunger", "xp"), or null. */
+    private String hudSection = null;
     private int lookPage = 0;
 
-    private record Icon(ItemStack stack, int x, int y, float scale) {}
+    /** Either an item (stack) or a HUD picture (sprite) to draw. */
+    private record Icon(ItemStack stack, Identifier sprite, int x, int y, float scale, int w, int h) {
+        static Icon item(ItemStack stack, int x, int y, float scale) { return new Icon(stack, null, x, y, scale, 16, 16); }
+        static Icon picture(Identifier sprite, int x, int y, int w, int h) { return new Icon(ItemStack.EMPTY, sprite, x, y, 1f, w, h); }
+    }
     private record Box(int x, int y, int w, int h) {}
 
     private final List<Icon> icons = new ArrayList<>();
@@ -82,13 +90,14 @@ public class CosmeticScreen extends Screen {
         highlights.clear();
 
         if (themePage) initThemes();
+        else if (hudSection != null) initHudLooks();
         else if (selectedItem != null) initLooks();
         else if (group >= 0) initGroup();
         else initMain();
 
         // bottom row
         int y = height - 28;
-        boolean canGoBack = themePage || selectedItem != null || group >= 0;
+        boolean canGoBack = themePage || hudSection != null || selectedItem != null || group >= 0;
         ButtonWidget back = ButtonWidget.builder(Text.literal("< Back"), b -> goBack())
                 .dimensions(width / 2 - 154, y, 98, 20).build();
         back.active = canGoBack;
@@ -104,6 +113,8 @@ public class CosmeticScreen extends Screen {
     private void goBack() {
         if (themePage) {
             themePage = false;
+        } else if (hudSection != null) {
+            hudSection = null;
         } else if (selectedItem != null) {
             selectedItem = null;   // back to the material list (or the main page for single items)
         } else {
@@ -132,8 +143,25 @@ public class CosmeticScreen extends Screen {
             Item it = item(CosmeticPackBuilder.SINGLES[i]);
             addRow(rightX, top + i * ROW, SINGLE_TITLES[i], it, hasLooks(it), () -> { selectedItem = it; });
         }
+        // hearts, hunger, XP bar (below the items on the right)
+        for (int h = 0; h < CosmeticPackBuilder.HUD_SECTIONS.length; h++) {
+            String sec = CosmeticPackBuilder.HUD_SECTIONS[h];
+            int y = top + (CosmeticPackBuilder.SINGLES.length + h) * ROW;
+            ButtonWidget button = ButtonWidget.builder(Text.literal(HUD_TITLES[h]), b -> {
+                hudSection = sec;
+                lookPage = 0;
+                clearAndInit();
+            }).dimensions(rightX + 22, y, BUTTON_W - 22, 20).build();
+            button.active = !CosmeticPackBuilder.hudLooks(sec).isEmpty();
+            addDrawableChild(button);
+            Identifier icon = Identifier.of("minecraft", hudIconSprite(sec));
+            if (sec.equals("xp")) icons.add(Icon.picture(icon, rightX + 1, y + 8, 18, 4));
+            else icons.add(Icon.picture(icon, rightX + 3, y + 5, 11, 11));
+        }
+
         // switch everything to one pack at once
-        int themeY = top + CosmeticPackBuilder.TOOLS.length * ROW + 8;
+        int rowsUsed = Math.max(CosmeticPackBuilder.TOOLS.length, CosmeticPackBuilder.SINGLES.length + CosmeticPackBuilder.HUD_SECTIONS.length);
+        int themeY = top + rowsUsed * ROW + 8;
         addDrawableChild(ButtonWidget.builder(Text.literal("Choose Theme"), b -> {
             themePage = true;
             lookPage = 0;
@@ -164,8 +192,67 @@ public class CosmeticScreen extends Screen {
         addPageButtons(pages, height - 56);
     }
 
+    private static String hudIconSprite(String sec) {
+        return switch (sec) {
+            case "hearts" -> "hud/heart/full";
+            case "hunger" -> "hud/food_full";
+            default -> "hud/experience_bar_progress";
+        };
+    }
+
+    // ---------- hearts / hunger / XP bar looks: pictures only ----------
+
+    private void initHudLooks() {
+        int index = java.util.Arrays.asList(CosmeticPackBuilder.HUD_SECTIONS).indexOf(hudSection);
+        heading = Text.literal(index >= 0 ? HUD_TITLES[index] : hudSection);
+        List<CosmeticPackBuilder.HudLook> looks = CosmeticPackBuilder.hudLooks(hudSection);
+        String current = HudLooks.get(hudSection);
+
+        int top = TOP;
+        int bottom = height - 34;
+        int areaW = Math.min(width - 20, 8 * CELL);
+        int cols = Math.max(1, areaW / CELL);
+        int rows = Math.max(1, (bottom - 24 - top) / CELL);
+        int per = cols * rows;
+        int pages = Math.max(1, (looks.size() + per - 1) / per);
+        lookPage = Math.max(0, Math.min(lookPage, pages - 1));
+        int shown = Math.min(cols, looks.size());
+        int startX = width / 2 - (shown * CELL) / 2 + (CELL - TILE) / 2;
+
+        int start = lookPage * per;
+        for (int i = start; i < Math.min(looks.size(), start + per); i++) {
+            CosmeticPackBuilder.HudLook look = looks.get(i);
+            int idx = i - start;
+            int cx = startX + (idx % cols) * CELL;
+            int cy = top + (idx / cols) * CELL;
+            String section = hudSection;
+            addDrawableChild(ButtonWidget.builder(Text.empty(), b -> {
+                // click the one you're using again to go back to your normal pack's look
+                HudLooks.set(section, look.slug().equals(HudLooks.get(section)) ? null : look.slug());
+                clearAndInit();
+            }).dimensions(cx, cy, TILE, TILE).build());
+
+            Identifier sprite = HudLooks.sprite(look.slug(), look.preview());
+            if (look.preview().startsWith("hud/experience_bar")) {
+                // empty bar on top, full bar underneath
+                if (look.sprites().contains("hud/experience_bar_background"))
+                    icons.add(Icon.picture(HudLooks.sprite(look.slug(), "hud/experience_bar_background"),
+                            cx + 4, cy + TILE / 2 - 8, TILE - 8, 6));
+                icons.add(Icon.picture(sprite, cx + 4, cy + TILE / 2 + 2, TILE - 8, 6));
+            } else {
+                icons.add(Icon.picture(sprite, cx + (TILE - 27) / 2, cy + (TILE - 27) / 2, 27, 27));
+            }
+            if (look.slug().equals(current)) highlights.add(new Box(cx - 1, cy - 1, TILE + 2, TILE + 2));
+        }
+        addPageButtons(pages, bottom - 22);
+    }
+
     private static void applyTheme(CosmeticPackBuilder.Theme theme) {
         for (Map.Entry<String, String> e : theme.lookForItem().entrySet()) {
+            if (e.getKey().startsWith("hud_")) {
+                HudLooks.set(e.getKey().substring("hud_".length()), e.getValue());
+                continue;
+            }
             Item it = item(e.getKey());
             if (it == Items.AIR) continue;
             Identifier model = Identifier.of("cosmetics", e.getKey() + "/" + e.getValue());
@@ -206,7 +293,7 @@ public class CosmeticScreen extends Screen {
         }).dimensions(x + 22, y, BUTTON_W - 22, 20).build();
         button.active = active;
         addDrawableChild(button);
-        icons.add(new Icon(new ItemStack(iconItem), x + 2, y + 2, 1f));
+        icons.add(Icon.item(new ItemStack(iconItem), x + 2, y + 2, 1f));
     }
 
     // ---------- page 3: pictures only ----------
@@ -243,7 +330,7 @@ public class CosmeticScreen extends Screen {
 
             ItemStack preview = new ItemStack(selectedItem);
             preview.set(DataComponentTypes.ITEM_MODEL, modelId);
-            icons.add(new Icon(preview, cx + (TILE - 32) / 2, cy + (TILE - 32) / 2, 2f));
+            icons.add(Icon.item(preview, cx + (TILE - 32) / 2, cy + (TILE - 32) / 2, 2f));
 
             if (modelId.equals(current)) highlights.add(new Box(cx - 1, cy - 1, TILE + 2, TILE + 2));
         }
@@ -278,6 +365,10 @@ public class CosmeticScreen extends Screen {
         }
 
         for (Icon icon : icons) {
+            if (icon.sprite() != null) {
+                context.drawGuiTexture(RenderPipelines.GUI_TEXTURED, icon.sprite(), icon.x(), icon.y(), icon.w(), icon.h());
+                continue;
+            }
             context.getMatrices().pushMatrix();
             context.getMatrices().translate(icon.x(), icon.y());
             context.getMatrices().scale(icon.scale(), icon.scale());
