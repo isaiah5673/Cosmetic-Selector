@@ -128,7 +128,15 @@ public class CosmeticScreen extends Screen {
 
     private void initMain() {
         heading = title;
-        int top = TOP;
+        // Choose Theme sits right under the big title
+        int themeY = 38;
+        addDrawableChild(ButtonWidget.builder(Text.literal("Choose Theme"), b -> {
+            themePage = true;
+            lookPage = 0;
+            clearAndInit();
+        }).dimensions(width / 2 - 100, themeY, 200, 20).build());
+        // then 7 rows on each side; move up a little if the screen is short so nothing gets cut off
+        int top = Math.max(themeY + 26, Math.min(TOP + 10, height - 36 - 7 * ROW));
         int leftX = width / 2 - BUTTON_W - 6;
         int rightX = width / 2 + 6;
 
@@ -143,30 +151,24 @@ public class CosmeticScreen extends Screen {
             Item it = item(CosmeticPackBuilder.SINGLES[i]);
             addRow(rightX, top + i * ROW, SINGLE_TITLES[i], it, hasLooks(it), () -> { selectedItem = it; });
         }
-        // hearts, hunger, XP bar (below the items on the right)
+        // Hearts and Hunger go under Totem on the right; XP Bar goes under Hoes on the left
         for (int h = 0; h < CosmeticPackBuilder.HUD_SECTIONS.length; h++) {
             String sec = CosmeticPackBuilder.HUD_SECTIONS[h];
-            int y = top + (CosmeticPackBuilder.SINGLES.length + h) * ROW;
+            boolean left = sec.equals("xp");
+            int colX = left ? leftX : rightX;
+            int y = left ? top + CosmeticPackBuilder.TOOLS.length * ROW
+                         : top + (CosmeticPackBuilder.SINGLES.length + h) * ROW;
             ButtonWidget button = ButtonWidget.builder(Text.literal(HUD_TITLES[h]), b -> {
                 hudSection = sec;
                 lookPage = 0;
                 clearAndInit();
-            }).dimensions(rightX + 22, y, BUTTON_W - 22, 20).build();
+            }).dimensions(colX + 22, y, BUTTON_W - 22, 20).build();
             button.active = !CosmeticPackBuilder.hudLooks(sec).isEmpty();
             addDrawableChild(button);
             Identifier icon = Identifier.of("minecraft", hudIconSprite(sec));
-            if (sec.equals("xp")) icons.add(Icon.picture(icon, rightX + 1, y + 8, 18, 4));
-            else icons.add(Icon.picture(icon, rightX + 3, y + 5, 11, 11));
+            if (left) icons.add(Icon.picture(icon, colX + 1, y + 8, 18, 4));
+            else icons.add(Icon.picture(icon, colX + 3, y + 5, 11, 11));
         }
-
-        // switch everything to one pack at once
-        int rowsUsed = Math.max(CosmeticPackBuilder.TOOLS.length, CosmeticPackBuilder.SINGLES.length + CosmeticPackBuilder.HUD_SECTIONS.length);
-        int themeY = top + rowsUsed * ROW + 8;
-        addDrawableChild(ButtonWidget.builder(Text.literal("Choose Theme"), b -> {
-            themePage = true;
-            lookPage = 0;
-            clearAndInit();
-        }).dimensions(width / 2 - 100, themeY, 200, 20).build());
     }
 
     // ---------- Choose Theme page ----------
