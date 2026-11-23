@@ -4,6 +4,8 @@ import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.PlayerSkinDrawer;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
 import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
@@ -22,6 +24,7 @@ import net.minecraft.text.OrderedText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -32,7 +35,7 @@ import java.util.Map;
  * a Servers page (your favorites, 5 per page) and a Chat page (faces + speech bubbles + a big message box).
  */
 public class ServerGuiScreen extends Screen {
-    private enum Page { MAIN, SERVERS, CHAT }
+    private enum Page { MAIN, SERVERS, CHAT, SKINS }
 
     private static final int TITLE_BLUE = 0x3A7DFF;      // title fades from blue...
     private static final int TITLE_GREEN = 0x3DDC6A;     // ...to green
@@ -43,6 +46,7 @@ public class ServerGuiScreen extends Screen {
     private static final int PER_PAGE = 5;
     private static final Identifier UNKNOWN_SERVER = Identifier.ofVanilla("textures/misc/unknown_server.png");
     private static final Identifier CHAT_ICON = Identifier.of("servergui", "textures/gui/chat_icon.png");
+    private static final Identifier SKIN_ICON = Identifier.of("servergui", "textures/gui/skin_icon.png");
     private static final Map<String, Identifier> FAVICONS = new HashMap<>();
 
     private final Screen parent;
@@ -50,6 +54,8 @@ public class ServerGuiScreen extends Screen {
     private int serverPage = 0;
     private int chatScroll = 0;           // how many pixels scrolled up from the newest message
     private String notice = null;         // a short message under the title
+    private int skinIndex = 0;            // which skin is in the middle of the carousel
+    private boolean busy = false;         // waiting for Mojang to change the skin
 
     private record Icon(ItemStack stack, Identifier texture, int x, int y) {}
     private record Favicon(Identifier id, int x, int y) {}
@@ -77,6 +83,7 @@ public class ServerGuiScreen extends Screen {
             case MAIN -> initMain();
             case SERVERS -> initServers();
             case CHAT -> initChat();
+            case SKINS -> initSkins();
         }
     }
 
@@ -86,6 +93,10 @@ public class ServerGuiScreen extends Screen {
         if (p == Page.CHAT) {
             ChatLog.markRead();
             chatScroll = 0;
+        }
+        if (p == Page.SKINS) {
+            SkinLibrary.reload();
+            skinIndex = 0;
         }
         clearAndInit();
     }
@@ -98,6 +109,7 @@ public class ServerGuiScreen extends Screen {
         addIconButton(x, y, "Servers", new ItemStack(Items.COMPASS), null, b -> { serverPage = 0; open(Page.SERVERS); });
         chatButton = addIconButton(x, y + 26, "Chat", ItemStack.EMPTY, CHAT_ICON, b -> open(Page.CHAT));
         chatButton.active = client != null && client.getNetworkHandler() != null;
+        addIconButton(x, y + 52, "Skins", ItemStack.EMPTY, SKIN_ICON, b -> open(Page.SKINS));
 
         addDrawableChild(ButtonWidget.builder(Text.literal("Done"), b -> close())
                 .dimensions(width / 2 - 100, height - 28, 200, 20).build());
@@ -158,10 +170,13 @@ public class ServerGuiScreen extends Screen {
     private void join(ServerInfo info) {
         if (client == null) return;
         if (client.world != null) {
-            notice = "Leave this world first (Esc > Disconnect), then pick a server.";
-            return;
+            // leave the world or server you're in (same steps as the Disconnect button), then join
+            boolean singleplayer = client.isInSingleplayer();
+            client.world.disconnect(Text.literal("Switching servers"));
+            if (singleplayer) client.disconnectWithSavingScreen();
+            else client.disconnectWithProgressScreen();
         }
-        ConnectScreen.connect(this, client, ServerAddress.parse(info.address), info, false, null);
+        ConnectScreen.connect(new MultiplayerScreen(new TitleScreen(false)), client, ServerAddress.parse(info.address), info, false, null);
     }
 
     /** The server's own logo (saved the last time the server list pinged it), or the "unknown server" picture. */
@@ -180,6 +195,95 @@ public class ServerGuiScreen extends Screen {
         } catch (Exception e) {
             return UNKNOWN_SERVER;
         }
+    }
+
+    // ---------- skins page ----------
+
+    private void initSkins() {
+        List<SkinLibrary.Skin> skins = SkinLibrary.skins();
+        int n = skins.size();
+        if (n > 0) skinIndex = Math.floorMod(skinIndex, n);
+        int midY = carouselTop() + carouselHeight() / 2 - 10;
+
+        ButtonWidget prev = ButtonWidget.builder(Text.literal("<"), b -> { skinIndex--; clearAndInit(); })
+                .dimensions(width / 2 - 170, midY, 20, 20).build();
+        ButtonWidget next = ButtonWidget.builder(Text.literal(">"), b -> { skinIndex++; clearAndInit(); })
+                .dimensions(width / 2 + 150, midY, 20, 20).build();
+        prev.active = next.active = n > 1;
+        addDrawableChild(prev);
+        addDrawableChild(next);
+
+        int y = height - 52;
+        addDrawableChild(ButtonWidget.builder(Text.literal("Upload"), b -> {
+            Path file = SkinLibrary.chooseFile();
+            notice = file != null ? SkinLibrary.importFile(file) : "Or drag a skin .png onto this window.";
+            skinIndex = 0;
+            clearAndInit();
+        }).dimensions(width / 2 - 102, y, 100, 20).build());
+        ButtonWidget select = ButtonWidget.builder(Text.literal(busy ? "Changing..." : "Select"), b -> {
+            SkinLibrary.Skin skin = currentSkin();
+            if (skin == null) return;
+            busy = true;
+            notice = "Changing your skin...";
+            clearAndInit();
+            SkinLibrary.wear(skin, message -> {
+                busy = false;
+                notice = message;
+                if (client != null && client.currentScreen == this) clearAndInit();
+            });
+        }).dimensions(width / 2 + 2, y, 100, 20).build();
+        SkinLibrary.Skin shown = currentSkin();
+        select.active = !busy && shown != null && !shown.current;
+        addDrawableChild(select);
+
+        addDrawableChild(ButtonWidget.builder(Text.literal("< Back"), b -> open(Page.MAIN))
+                .dimensions(width / 2 - 100, height - 28, 200, 20).build());
+    }
+
+    private SkinLibrary.Skin currentSkin() {
+        List<SkinLibrary.Skin> skins = SkinLibrary.skins();
+        if (skins.isEmpty()) return null;
+        return skins.get(Math.floorMod(skinIndex, skins.size()));
+    }
+
+    private int carouselTop() { return 46; }
+    private int carouselHeight() { return Math.max(60, height - 60 - carouselTop() - 8); }
+
+    /** The middle skin big, the ones beside it smaller, like a carousel. */
+    private void renderSkins(DrawContext context) {
+        List<SkinLibrary.Skin> skins = SkinLibrary.skins();
+        int n = skins.size();
+        if (n == 0) {
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("No skins found yet."), width / 2, carouselTop() + 30, GRAY);
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("Press Upload, or drag a skin .png onto this window."), width / 2, carouselTop() + 44, GRAY);
+            return;
+        }
+        int bigH = Math.min(128, carouselHeight());
+        int feet = carouselTop() + bigH;
+        int[] offsets = n >= 5 ? new int[]{-2, 2, -1, 1, 0} : n >= 3 ? new int[]{-1, 1, 0} : n == 2 ? new int[]{1, 0} : new int[]{0};
+        for (int off : offsets) {
+            SkinLibrary.Skin skin = skins.get(Math.floorMod(skinIndex + off, n));
+            Identifier tex = SkinLibrary.preview(skin);
+            if (tex == null) continue;
+            int h = off == 0 ? bigH : Math.abs(off) == 1 ? bigH * 5 / 8 : bigH * 2 / 5;
+            int w = h / 2;
+            int cx = width / 2 + Integer.signum(off) * (Math.abs(off) == 1 ? 62 : 112);
+            context.drawTexture(RenderPipelines.GUI_TEXTURED, tex, cx - w / 2, feet - h, 0f, 0f, w, h, w, h);
+        }
+        SkinLibrary.Skin middle = skins.get(Math.floorMod(skinIndex, n));
+        if (middle.current) {
+            context.drawCenteredTextWithShadow(textRenderer, Text.literal("Wearing"), width / 2, feet + 3, 0xFF7CFC9A);
+        }
+    }
+
+    @Override
+    public void onFilesDropped(List<Path> paths) {
+        if (page != Page.SKINS) return;
+        String last = null;
+        for (Path p : paths) last = SkinLibrary.importFile(p);
+        if (last != null) notice = last;
+        skinIndex = 0;
+        clearAndInit();
     }
 
     // ---------- chat page ----------
@@ -251,8 +355,11 @@ public class ServerGuiScreen extends Screen {
         context.enableScissor(left - 4, areaTop, left + areaW + 4, areaBottom);
         int y = areaBottom + chatScroll;
         ClientPlayNetworkHandler handler = client != null ? client.getNetworkHandler() : null;
+        String me = myName();
+        int right = left + areaW;
         for (int i = entries.size() - 1; i >= 0 && y > areaTop; i--) {
             ChatLog.Entry e = entries.get(i);
+            boolean mine = e.name() != null && me != null && e.name().replaceAll("^[.*~]+", "").equalsIgnoreCase(me);
             List<OrderedText> lines = textRenderer.wrapLines(Text.literal(e.text()), bubbleMax - 12);
             int bubbleW = 12;
             for (OrderedText line : lines) bubbleW = Math.max(bubbleW, textRenderer.getWidth(line) + 12);
@@ -263,17 +370,20 @@ public class ServerGuiScreen extends Screen {
             if (y + blockH < areaTop) continue;
 
             int by = y + nameH;
-            // face next to the bottom of the bubble
             int faceY = by + bubbleH - face;
-            drawFace(context, handler, e.name(), left, faceY, face);
-
+            // me: face on the left, bubble to its right. Everyone else: face on the right, bubble to its left.
+            int faceX = mine ? left : right - face;
+            int bx = mine ? bubbleLeft : right - face - 8 - bubbleW;
+            drawFace(context, handler, e.name(), faceX, faceY, face);
             if (e.name() != null) {
-                context.drawTextWithShadow(textRenderer, Text.literal(e.name()), bubbleLeft + 3, y, 0xFFFFE070);
+                Text nameText = Text.literal(e.name());
+                int nx = mine ? bx + 3 : bx + bubbleW - 3 - textRenderer.getWidth(nameText);
+                context.drawTextWithShadow(textRenderer, nameText, nx, y, mine ? 0xFF7CFC9A : 0xFFFFE070);
             }
-            drawBubble(context, bubbleLeft, by, bubbleW, bubbleH, faceY + face / 2);
+            drawBubble(context, bx, by, bubbleW, bubbleH, faceY + face / 2, !mine);
             int ty = by + 4;
             for (OrderedText line : lines) {
-                context.drawText(textRenderer, line, bubbleLeft + 6, ty, 0xFF1E1E1E, false);
+                context.drawText(textRenderer, line, bx + 6, ty, 0xFF1E1E1E, false);
                 ty += 10;
             }
         }
@@ -306,8 +416,14 @@ public class ServerGuiScreen extends Screen {
         context.drawTexture(RenderPipelines.GUI_TEXTURED, logo, x, y, 0f, 0f, size, size, size, size);
     }
 
-    /** A rounded speech bubble with a little tail pointing left at the face. */
-    private static void drawBubble(DrawContext c, int x, int y, int w, int h, int tailY) {
+    private String myName() {
+        if (client == null) return null;
+        if (client.player != null) return client.player.getName().getString();
+        return client.getSession().getUsername();
+    }
+
+    /** A rounded speech bubble with a little tail pointing at the face (left, or right when tailRight). */
+    private static void drawBubble(DrawContext c, int x, int y, int w, int h, int tailY, boolean tailRight) {
         int border = 0xFF2B2B2B;
         int fill = 0xFFF4F4F4;
         int shade = 0xFFD9D9D9;
@@ -321,12 +437,19 @@ public class ServerGuiScreen extends Screen {
         c.fill(x + 2, y + h - 2, x + w - 2, y + h - 1, shade);   // soft bottom edge
         // tail
         int ty = Math.max(y + 3, Math.min(tailY - 2, y + h - 6));
-        for (int t = 0; t < 4; t++) {
-            c.fill(x - 1 - t, ty + t, x, ty + t + 1, border);
-            c.fill(x - 1 - t, ty + 4 - t, x, ty + 5 - t, border);
-        }
-        for (int t = 0; t < 3; t++) {
-            c.fill(x - t, ty + t + 1, x + 1, ty + 4 - t, fill);
+        if (!tailRight) {
+            for (int t = 0; t < 4; t++) {
+                c.fill(x - 1 - t, ty + t, x, ty + t + 1, border);
+                c.fill(x - 1 - t, ty + 4 - t, x, ty + 5 - t, border);
+            }
+            for (int t = 0; t < 3; t++) c.fill(x - t, ty + t + 1, x + 1, ty + 4 - t, fill);
+        } else {
+            int r = x + w;
+            for (int t = 0; t < 4; t++) {
+                c.fill(r, ty + t, r + 1 + t, ty + t + 1, border);
+                c.fill(r, ty + 4 - t, r + 1 + t, ty + 5 - t, border);
+            }
+            for (int t = 0; t < 3; t++) c.fill(r - 1, ty + t + 1, r + t, ty + 4 - t, fill);
         }
     }
 
@@ -356,6 +479,7 @@ public class ServerGuiScreen extends Screen {
             case MAIN -> "ServerGUI";
             case SERVERS -> "Servers";
             case CHAT -> "Chat";
+            case SKINS -> "Skins";
         };
         context.getMatrices().pushMatrix();
         context.getMatrices().translate(width / 2f, 12);
@@ -385,6 +509,7 @@ public class ServerGuiScreen extends Screen {
         }
 
         if (page == Page.CHAT) renderChat(context);
+        if (page == Page.SKINS) renderSkins(context);
     }
 
     @Override
