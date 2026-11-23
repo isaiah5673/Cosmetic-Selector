@@ -46,6 +46,9 @@ public class ServerGuiScreen extends Screen {
     private static final int PER_PAGE = 5;
     private static final Identifier UNKNOWN_SERVER = Identifier.ofVanilla("textures/misc/unknown_server.png");
     private static final Identifier CHAT_ICON = Identifier.of("servergui", "textures/gui/chat_icon.png");
+    private static final Identifier TRASH_ICON = Identifier.of("servergui", "textures/gui/trash_icon.png");
+    private static final int SKIN_COLS = 7;   // 7 skins in each row
+    private static final int SKIN_ROWS = 2;   // 2 rows on each page
     private static final Map<String, Identifier> FAVICONS = new HashMap<>();
 
     private final Screen parent;
@@ -205,15 +208,16 @@ public class ServerGuiScreen extends Screen {
         int perPage() { return cols * rows; }
     }
 
+    /** Always 7 boxes per row and 2 rows per page; the boxes shrink to fit smaller screens. */
     private SkinGrid skinGrid() {
-        int boxW = 40, boxH = 72, gap = 6;
-        int top = 40;
-        int areaW = Math.min(width - 80, 9 * (boxW + gap));
+        int gap = 5;
+        int top = 38;
         int areaH = height - 70 - top;
-        int cols = Math.max(1, (areaW + gap) / (boxW + gap));
-        int rows = Math.max(1, (areaH + gap) / (boxH + gap));
-        int gridW = cols * (boxW + gap) - gap;
-        return new SkinGrid(width / 2 - gridW / 2, top, cols, rows, boxW, boxH, gap);
+        int areaW = width - 80;
+        int boxH = Math.max(36, Math.min(66, (areaH - gap * (SKIN_ROWS - 1)) / SKIN_ROWS));
+        int boxW = Math.max(22, Math.min(boxH * 5 / 8, (areaW - gap * (SKIN_COLS - 1)) / SKIN_COLS));
+        int gridW = SKIN_COLS * (boxW + gap) - gap;
+        return new SkinGrid(width / 2 - gridW / 2, top, SKIN_COLS, SKIN_ROWS, boxW, boxH, gap);
     }
 
     private void initSkins() {
@@ -281,6 +285,9 @@ public class ServerGuiScreen extends Screen {
         }).dimensions(width / 2 + 54, y, 100, 20).build();
         delete.active = picked != null && !picked.current;
         addDrawableChild(delete);
+        // trash can just left of the word "Delete"
+        int deleteTextW = textRenderer.getWidth("Delete");
+        icons.add(new Icon(ItemStack.EMPTY, TRASH_ICON, width / 2 + 54 + 50 - deleteTextW / 2 - 19, y + 2));
 
         addDrawableChild(ButtonWidget.builder(Text.literal("< Back"), b -> open(Page.MAIN))
                 .dimensions(width / 2 - 100, height - 28, 200, 20).build());
@@ -309,8 +316,8 @@ public class ServerGuiScreen extends Screen {
             int by = g.top() + (idx / g.cols()) * (g.boxH() + g.gap());
             Identifier tex = SkinLibrary.preview(skin);
             if (tex != null) {
-                int h = g.boxH() - 8, w = h / 2;
-                context.drawTexture(RenderPipelines.GUI_TEXTURED, tex, bx + (g.boxW() - w) / 2, by + 4, 0f, 0f, w, h, w, h);
+                int h = Math.min(g.boxH() - 8, (g.boxW() - 4) * 2), w = h / 2;
+                context.drawTexture(RenderPipelines.GUI_TEXTURED, tex, bx + (g.boxW() - w) / 2, by + (g.boxH() - h) / 2, 0f, 0f, w, h, w, h);
             }
             int outline = skin.id.equals(pickedSkin) ? 0xFFFFB000 : skin.current ? 0xFF55DD77 : 0;
             if (outline != 0) {
