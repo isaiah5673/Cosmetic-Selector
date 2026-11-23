@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "servergui",
+  "version": "${version}",
+  "name": "ServerGUI",
+  "description": "Press N (changeable in Controls) for your favorite servers and a bigger chat with player faces.",
+  "authors": ["MangoMaucho"],
+  "license": "MIT",
+  "icon": "assets/servergui/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["net.mangomaucho.servergui.ServerGuiClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
