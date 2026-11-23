@@ -8,6 +8,8 @@ import net.minecraft.text.Text;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Keeps the last chat messages, with who said them, for the Chat page. */
 public final class ChatLog {
@@ -15,6 +17,11 @@ public final class ChatLog {
     public record Entry(String name, String text) {}
 
     private static final int MAX = 200;
+    // "[Rank] [Rank] Name: message"  or  "Name » message"  (ranks in [ ] or ( ) are skipped)
+    private static final Pattern RANKED = Pattern.compile(
+            "^\\s*(?:[\\[(][^\\])]{0,24}[\\])]\\s*)*([.*~]?[A-Za-z0-9_]{3,16})\\s*[:»|>]+\\s+(.+)$");
+    // "<Name> message" (normal Minecraft chat)
+    private static final Pattern VANILLA = Pattern.compile("^\\s*<([.*~]?[A-Za-z0-9_]{3,16})>\\s+(.+)$");
     private static final List<Entry> entries = new ArrayList<>();
     private static boolean unread = false;
     private static boolean inWorld = false;
@@ -29,15 +36,26 @@ public final class ChatLog {
     static void addChat(Text message, Object senderProfile) {
         String line = message.getString();
         String name = senderProfile != null ? Profiles.name(senderProfile) : null;
-        if (name == null) name = findSpeaker(line);
-        add(name, name != null ? stripName(line, name) : line);
+        if (name != null) { add(name, stripName(line, name)); return; }
+        addGuessing(line);
     }
 
     /** A server/system message. Many servers send player chat this way, so look for a player name at the start. */
     static void addGame(Text message) {
-        String line = message.getString();
+        addGuessing(message.getString());
+    }
+
+    private static void addGuessing(String line) {
+        // 1) the usual chat shapes: "<Name> hi", "[Rank] Name: hi", "Name » hi"
+        for (Pattern p : new Pattern[]{VANILLA, RANKED}) {
+            Matcher m = p.matcher(line);
+            if (m.matches()) { add(m.group(1), m.group(2)); return; }
+        }
+        // 2) a player from the tab list near the start of the line
         String name = findSpeaker(line);
-        add(name, name != null ? stripName(line, name) : line);
+        if (name != null) { add(name, stripName(line, name)); return; }
+        // 3) a real server message (no player)
+        add(null, line);
     }
 
     private static synchronized void add(String name, String text) {
